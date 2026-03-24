@@ -6,67 +6,100 @@
   "model": "claude-4-opus",
   "harness": "router_v2",
   "timestamp": "2026-03-24T11:20:30Z",
-  "tags": {"dataset": "helpdesk_mini", "cohort": "router_experiment"},
+  "tags": {
+    "dataset": "helpdesk_mini",
+    "cohort": "router_experiment"
+  },
   "steps": [
     {
-      "step": 0,
       "type": "llm",
       "name": "plan",
-      "input_summary": "User needs to check remaining PTO balance and submit a time-off request for next Friday",
-      "output_summary": "Plan: retrieve PTO balance from docs or API, then guide user through request submission",
-      "tokens_in": 670,
-      "tokens_out": 220,
-      "latency_ms": 1900,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 670,
+        "tokens_out": 220,
+        "latency_ms": 1900
+      },
+      "idx": 0,
+      "input": {
+        "summary": "User needs to check remaining PTO balance and submit a time-off request for next Friday"
+      },
+      "output": {
+        "summary": "Plan: retrieve PTO balance from docs or API, then guide user through request submission"
+      }
     },
     {
-      "step": 1,
       "type": "tool",
       "name": "search_docs",
-      "input_summary": "Query: PTO balance check time-off request submission process",
-      "output_summary": "Found doc: KB-5010 Time Off Policies. Contains policy details but not live balance data. References HR API for balance lookups.",
-      "tokens_in": 220,
-      "tokens_out": 530,
-      "latency_ms": 940,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 220,
+        "tokens_out": 530,
+        "latency_ms": 940
+      },
+      "idx": 1,
+      "input": {
+        "summary": "Query: PTO balance check time-off request submission process"
+      },
+      "output": {
+        "summary": "Found doc: KB-5010 Time Off Policies. Contains policy details but not live balance data. References HR API for balance lookups."
+      }
     },
     {
-      "step": 2,
       "type": "compaction",
       "name": "compress",
-      "input_summary": "Context window at 80% capacity after large KB document retrieval. Compacting early.",
-      "output_summary": "Compressed 750 tokens to 280 tokens. Retained: user question summary, KB article ID. Dropped: full KB text, policy details, API reference for balance lookup.",
-      "tokens_in": 750,
-      "tokens_out": 280,
-      "latency_ms": 510,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 750,
+        "tokens_out": 280,
+        "latency_ms": 510
+      },
+      "idx": 2,
+      "input": {
+        "summary": "Context window at 80% capacity after large KB document retrieval. Compacting early."
+      },
+      "output": {
+        "summary": "Compressed 750 tokens to 280 tokens. Retained: user question summary, KB article ID. Dropped: full KB text, policy details, API reference for balance lookup."
+      }
     },
     {
-      "step": 3,
       "type": "llm",
       "name": "reason",
-      "input_summary": "Draft PTO response from compressed context (KB-5010 reference retained but details lost)",
-      "output_summary": "Attempted to draft response but cannot recall whether balance requires API call or is in the KB. Missing the API endpoint reference that was compacted away.",
-      "tokens_in": 950,
-      "tokens_out": 180,
-      "latency_ms": 1650,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 950,
+        "tokens_out": 180,
+        "latency_ms": 1650
+      },
+      "idx": 3,
+      "input": {
+        "summary": "Draft PTO response from compressed context (KB-5010 reference retained but details lost)"
+      },
+      "output": {
+        "summary": "Attempted to draft response but cannot recall whether balance requires API call or is in the KB. Missing the API endpoint reference that was compacted away."
+      }
     },
     {
-      "step": 4,
       "type": "error",
       "name": "context_lost",
-      "input_summary": "Agent output indicates inability to complete task due to missing context post-compaction",
-      "output_summary": "Terminated run: compaction removed critical information (HR API endpoint) needed to fulfill the user request. Agent could not recover.",
-      "tokens_in": 0,
-      "tokens_out": 0,
-      "latency_ms": 40,
-      "status": "fail"
+      "status": "fail",
+      "metrics": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "latency_ms": 40
+      },
+      "idx": 4,
+      "input": {
+        "summary": "Agent output indicates inability to complete task due to missing context post-compaction"
+      },
+      "output": {
+        "summary": "Terminated run: compaction removed critical information (HR API endpoint) needed to fulfill the user request. Agent could not recover."
+      }
     }
   ],
   "result": {
     "success": false,
-    "score": 0.10,
+    "score": 0.1,
     "label": "fail",
     "error_type": "context_lost",
     "summary": "Aggressive early compaction dropped the HR API reference needed to fetch PTO balance; agent could not recover"

@@ -6,62 +6,95 @@
   "model": "claude-4-opus",
   "harness": "baseline_v1",
   "timestamp": "2026-03-24T10:35:20Z",
-  "tags": {"dataset": "helpdesk_mini", "cohort": "baseline"},
+  "tags": {
+    "dataset": "helpdesk_mini",
+    "cohort": "baseline"
+  },
   "steps": [
     {
-      "step": 0,
       "type": "llm",
       "name": "plan",
-      "input_summary": "User reports VPN connection drops every 10 minutes on macOS Sequoia",
-      "output_summary": "Plan: search docs for VPN macOS issues, try multiple queries if needed",
-      "tokens_in": 740,
-      "tokens_out": 205,
-      "latency_ms": 1920,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 740,
+        "tokens_out": 205,
+        "latency_ms": 1920
+      },
+      "idx": 0,
+      "input": {
+        "summary": "User reports VPN connection drops every 10 minutes on macOS Sequoia"
+      },
+      "output": {
+        "summary": "Plan: search docs for VPN macOS issues, try multiple queries if needed"
+      }
     },
     {
-      "step": 1,
       "type": "tool",
       "name": "search_docs",
-      "input_summary": "Query: VPN timeout macOS Sequoia",
-      "output_summary": "Found doc: KB-3102 VPN Troubleshooting (Windows only). No macOS match.",
-      "tokens_in": 205,
-      "tokens_out": 380,
-      "latency_ms": 790,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 205,
+        "tokens_out": 380,
+        "latency_ms": 790
+      },
+      "idx": 1,
+      "input": {
+        "summary": "Query: VPN timeout macOS Sequoia"
+      },
+      "output": {
+        "summary": "Found doc: KB-3102 VPN Troubleshooting (Windows only). No macOS match."
+      }
     },
     {
-      "step": 2,
       "type": "tool",
       "name": "search_docs",
-      "input_summary": "Query: macOS network keep-alive VPN client",
-      "output_summary": "No new results. KB-3102 returned again with low relevance score.",
-      "tokens_in": 585,
-      "tokens_out": 310,
-      "latency_ms": 820,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 585,
+        "tokens_out": 310,
+        "latency_ms": 820
+      },
+      "idx": 2,
+      "input": {
+        "summary": "Query: macOS network keep-alive VPN client"
+      },
+      "output": {
+        "summary": "No new results. KB-3102 returned again with low relevance score."
+      }
     },
     {
-      "step": 3,
       "type": "tool",
       "name": "search_api",
-      "input_summary": "Query vendor API for VPN macOS disconnect issue",
-      "output_summary": "API returned advisory about v4.2.1 bug but agent context already saturated with repeated doc results",
-      "tokens_in": 895,
-      "tokens_out": 420,
-      "latency_ms": 1380,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 895,
+        "tokens_out": 420,
+        "latency_ms": 1380
+      },
+      "idx": 3,
+      "input": {
+        "summary": "Query vendor API for VPN macOS disconnect issue"
+      },
+      "output": {
+        "summary": "API returned advisory about v4.2.1 bug but agent context already saturated with repeated doc results"
+      }
     },
     {
-      "step": 4,
       "type": "error",
       "name": "loop_detected",
-      "input_summary": "Harness detected repeated retrieval pattern with diminishing relevance scores",
-      "output_summary": "Terminated run: agent failed to synthesize a response after retrieval loop consumed context budget",
-      "tokens_in": 0,
-      "tokens_out": 0,
-      "latency_ms": 45,
-      "status": "fail"
+      "status": "fail",
+      "metrics": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "latency_ms": 45
+      },
+      "idx": 4,
+      "input": {
+        "summary": "Harness detected repeated retrieval pattern with diminishing relevance scores"
+      },
+      "output": {
+        "summary": "Terminated run: agent failed to synthesize a response after retrieval loop consumed context budget"
+      }
     }
   ],
   "result": {

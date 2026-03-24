@@ -6,63 +6,96 @@
   "model": "claude-4-opus",
   "harness": "router_v2",
   "timestamp": "2026-03-24T10:28:45Z",
-  "tags": {"dataset": "helpdesk_mini", "cohort": "router_experiment"},
+  "tags": {
+    "dataset": "helpdesk_mini",
+    "cohort": "router_experiment"
+  },
   "steps": [
     {
-      "step": 0,
       "type": "llm",
       "name": "plan",
-      "input_summary": "User reports VPN connection drops every 10 minutes on macOS Sequoia",
-      "output_summary": "Plan: search internal docs first, then fall back to API lookup for platform-specific fixes",
-      "tokens_in": 720,
-      "tokens_out": 230,
-      "latency_ms": 1850,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 720,
+        "tokens_out": 230,
+        "latency_ms": 1850
+      },
+      "idx": 0,
+      "input": {
+        "summary": "User reports VPN connection drops every 10 minutes on macOS Sequoia"
+      },
+      "output": {
+        "summary": "Plan: search internal docs first, then fall back to API lookup for platform-specific fixes"
+      }
     },
     {
-      "step": 1,
       "type": "tool",
       "name": "search_docs",
-      "input_summary": "Query: VPN disconnect macOS Sequoia",
-      "output_summary": "Found doc: KB-3102 VPN Troubleshooting (Windows only). No macOS-specific content.",
-      "tokens_in": 230,
-      "tokens_out": 410,
-      "latency_ms": 830,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 230,
+        "tokens_out": 410,
+        "latency_ms": 830
+      },
+      "idx": 1,
+      "input": {
+        "summary": "Query: VPN disconnect macOS Sequoia"
+      },
+      "output": {
+        "summary": "Found doc: KB-3102 VPN Troubleshooting (Windows only). No macOS-specific content."
+      }
     },
     {
-      "step": 2,
       "type": "tool",
       "name": "search_api",
-      "input_summary": "Query vendor support API for VPN client macOS Sequoia known issues",
-      "output_summary": "API returned advisory: VPN client v4.2.1 has a known keep-alive bug on macOS 15+. Fix available in v4.3.0.",
-      "tokens_in": 410,
-      "tokens_out": 380,
-      "latency_ms": 1420,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 410,
+        "tokens_out": 380,
+        "latency_ms": 1420
+      },
+      "idx": 2,
+      "input": {
+        "summary": "Query vendor support API for VPN client macOS Sequoia known issues"
+      },
+      "output": {
+        "summary": "API returned advisory: VPN client v4.2.1 has a known keep-alive bug on macOS 15+. Fix available in v4.3.0."
+      }
     },
     {
-      "step": 3,
       "type": "llm",
       "name": "reason",
-      "input_summary": "Combine KB-3102 general troubleshooting with vendor advisory about v4.2.1 bug",
-      "output_summary": "Drafted reply: known bug in VPN client v4.2.1 on macOS 15+, recommend upgrading to v4.3.0, include manual keep-alive workaround in the interim",
-      "tokens_in": 1520,
-      "tokens_out": 350,
-      "latency_ms": 2200,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 1520,
+        "tokens_out": 350,
+        "latency_ms": 2200
+      },
+      "idx": 3,
+      "input": {
+        "summary": "Combine KB-3102 general troubleshooting with vendor advisory about v4.2.1 bug"
+      },
+      "output": {
+        "summary": "Drafted reply: known bug in VPN client v4.2.1 on macOS 15+, recommend upgrading to v4.3.0, include manual keep-alive workaround in the interim"
+      }
     },
     {
-      "step": 4,
       "type": "judge",
       "name": "verify",
-      "input_summary": "Validate response against vendor advisory and KB-3102",
-      "output_summary": "Response correctly identifies the version bug and recommends upgrade. Workaround is consistent with vendor guidance.",
-      "tokens_in": 1870,
-      "tokens_out": 105,
-      "latency_ms": 1250,
       "status": "ok",
-      "judge_score": 0.91
+      "judge_score": 0.91,
+      "metrics": {
+        "tokens_in": 1870,
+        "tokens_out": 105,
+        "latency_ms": 1250
+      },
+      "idx": 4,
+      "input": {
+        "summary": "Validate response against vendor advisory and KB-3102"
+      },
+      "output": {
+        "summary": "Response correctly identifies the version bug and recommends upgrade. Workaround is consistent with vendor guidance."
+      }
     }
   ],
   "result": {

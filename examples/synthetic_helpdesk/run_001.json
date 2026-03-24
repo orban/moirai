@@ -6,52 +6,79 @@
   "model": "claude-3.7-sonnet",
   "harness": "baseline_v1",
   "timestamp": "2026-03-24T10:00:00Z",
-  "tags": {"dataset": "helpdesk_mini", "cohort": "baseline"},
+  "tags": {
+    "dataset": "helpdesk_mini",
+    "cohort": "baseline"
+  },
   "steps": [
     {
-      "step": 0,
       "type": "llm",
       "name": "plan",
-      "input_summary": "User asks how to reset MFA on their corporate account after phone replacement",
-      "output_summary": "Plan: search internal docs for MFA reset procedure, then compose step-by-step instructions",
-      "tokens_in": 820,
-      "tokens_out": 215,
-      "latency_ms": 1340,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 820,
+        "tokens_out": 215,
+        "latency_ms": 1340
+      },
+      "idx": 0,
+      "input": {
+        "summary": "User asks how to reset MFA on their corporate account after phone replacement"
+      },
+      "output": {
+        "summary": "Plan: search internal docs for MFA reset procedure, then compose step-by-step instructions"
+      }
     },
     {
-      "step": 1,
       "type": "tool",
       "name": "search_docs",
-      "input_summary": "Query: MFA reset procedure corporate account",
-      "output_summary": "Found doc: KB-2041 MFA Reset Guide. Covers admin-initiated reset and self-service with backup codes.",
-      "tokens_in": 215,
-      "tokens_out": 480,
-      "latency_ms": 870,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 215,
+        "tokens_out": 480,
+        "latency_ms": 870
+      },
+      "idx": 1,
+      "input": {
+        "summary": "Query: MFA reset procedure corporate account"
+      },
+      "output": {
+        "summary": "Found doc: KB-2041 MFA Reset Guide. Covers admin-initiated reset and self-service with backup codes."
+      }
     },
     {
-      "step": 2,
       "type": "llm",
       "name": "reason",
-      "input_summary": "Synthesize KB-2041 into user-facing instructions for MFA reset after device change",
-      "output_summary": "Drafted 4-step reply: navigate to security settings, select reset MFA, verify via backup email, re-enroll new device",
-      "tokens_in": 1350,
-      "tokens_out": 310,
-      "latency_ms": 1820,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 1350,
+        "tokens_out": 310,
+        "latency_ms": 1820
+      },
+      "idx": 2,
+      "input": {
+        "summary": "Synthesize KB-2041 into user-facing instructions for MFA reset after device change"
+      },
+      "output": {
+        "summary": "Drafted 4-step reply: navigate to security settings, select reset MFA, verify via backup email, re-enroll new device"
+      }
     },
     {
-      "step": 3,
       "type": "judge",
       "name": "verify",
-      "input_summary": "Check agent reply against KB-2041 ground truth and user question",
-      "output_summary": "All 4 steps match KB article. No hallucinated information. Tone is appropriate.",
-      "tokens_in": 1680,
-      "tokens_out": 95,
-      "latency_ms": 1150,
       "status": "ok",
-      "judge_score": 0.95
+      "judge_score": 0.95,
+      "metrics": {
+        "tokens_in": 1680,
+        "tokens_out": 95,
+        "latency_ms": 1150
+      },
+      "idx": 3,
+      "input": {
+        "summary": "Check agent reply against KB-2041 ground truth and user question"
+      },
+      "output": {
+        "summary": "All 4 steps match KB article. No hallucinated information. Tone is appropriate."
+      }
     }
   ],
   "result": {

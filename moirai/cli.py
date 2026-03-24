@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import typer
@@ -8,6 +7,7 @@ from rich.console import Console
 
 from moirai.filters import filter_runs
 from moirai.load import load_runs, validate_file, _find_json_files
+from moirai.schema import Run
 
 app = typer.Typer(
     name="moirai",
@@ -38,7 +38,7 @@ def _load_and_filter(
     model: str | None = None,
     harness: str | None = None,
     task_family: str | None = None,
-) -> list:
+) -> list[Run]:
     runs, warnings = load_runs(path, strict=strict)
     _print_warnings(warnings)
 
@@ -76,3 +76,43 @@ def validate(
 
     if any(not r.passed for r in results):
         raise typer.Exit(1)
+
+
+@app.command()
+def summary(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    model: str | None = typer.Option(None, help="Filter by model"),
+    harness: str | None = typer.Option(None, help="Filter by harness"),
+    task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
+) -> None:
+    """Aggregate stats across runs."""
+    runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
+
+    from moirai.analyze.summary import summarize_runs
+    from moirai.viz.terminal import print_summary
+
+    result = summarize_runs(runs)
+    print_summary(result)
+
+
+@app.command()
+def trace(
+    path: Path = typer.Argument(..., help="Path to a single run JSON file"),
+    expand: bool = typer.Option(False, help="Show input/output details for each step"),
+) -> None:
+    """Inspect a single run."""
+    if path.is_dir():
+        err_console.print("[red]error:[/red] trace requires a single run file, not a directory")
+        raise typer.Exit(1)
+
+    runs, warnings = load_runs(path)
+    _print_warnings(warnings)
+
+    if not runs:
+        err_console.print("[red]error:[/red] failed to load run")
+        raise typer.Exit(1)
+
+    from moirai.viz.terminal import print_trace
+
+    print_trace(runs[0], expand=expand)

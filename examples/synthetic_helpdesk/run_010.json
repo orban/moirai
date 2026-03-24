@@ -6,79 +6,118 @@
   "model": "claude-4-opus",
   "harness": "baseline_v1",
   "timestamp": "2026-03-24T11:05:00Z",
-  "tags": {"dataset": "helpdesk_mini", "cohort": "baseline"},
+  "tags": {
+    "dataset": "helpdesk_mini",
+    "cohort": "baseline"
+  },
   "steps": [
     {
-      "step": 0,
       "type": "llm",
       "name": "plan",
-      "input_summary": "User asks how to reset MFA on their corporate account after phone replacement",
-      "output_summary": "Plan: search docs for MFA reset, compose detailed response with all edge cases",
-      "tokens_in": 860,
-      "tokens_out": 265,
-      "latency_ms": 2050,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 860,
+        "tokens_out": 265,
+        "latency_ms": 2050
+      },
+      "idx": 0,
+      "input": {
+        "summary": "User asks how to reset MFA on their corporate account after phone replacement"
+      },
+      "output": {
+        "summary": "Plan: search docs for MFA reset, compose detailed response with all edge cases"
+      }
     },
     {
-      "step": 1,
       "type": "tool",
       "name": "search_docs",
-      "input_summary": "Query: MFA reset corporate account device replacement",
-      "output_summary": "Found doc: KB-2041 MFA Reset Guide. Full text retrieved including admin reset and self-service flows.",
-      "tokens_in": 265,
-      "tokens_out": 580,
-      "latency_ms": 910,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 265,
+        "tokens_out": 580,
+        "latency_ms": 910
+      },
+      "idx": 1,
+      "input": {
+        "summary": "Query: MFA reset corporate account device replacement"
+      },
+      "output": {
+        "summary": "Found doc: KB-2041 MFA Reset Guide. Full text retrieved including admin reset and self-service flows."
+      }
     },
     {
-      "step": 2,
       "type": "llm",
       "name": "reason",
-      "input_summary": "Draft response from KB-2041 covering self-service MFA reset for device replacement",
-      "output_summary": "Drafted detailed 6-step response including backup code verification and authenticator re-enrollment",
-      "tokens_in": 1705,
-      "tokens_out": 450,
-      "latency_ms": 2800,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 1705,
+        "tokens_out": 450,
+        "latency_ms": 2800
+      },
+      "idx": 2,
+      "input": {
+        "summary": "Draft response from KB-2041 covering self-service MFA reset for device replacement"
+      },
+      "output": {
+        "summary": "Drafted detailed 6-step response including backup code verification and authenticator re-enrollment"
+      }
     },
     {
-      "step": 3,
       "type": "compaction",
       "name": "compress",
-      "input_summary": "Context window at 78% capacity. Compacting conversation history.",
-      "output_summary": "Compressed 1705 tokens of prior context to 640 tokens. Retained: user question, KB article ID, draft response outline. Dropped: full KB text, search metadata.",
-      "tokens_in": 1705,
-      "tokens_out": 640,
-      "latency_ms": 550,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 1705,
+        "tokens_out": 640,
+        "latency_ms": 550
+      },
+      "idx": 3,
+      "input": {
+        "summary": "Context window at 78% capacity. Compacting conversation history."
+      },
+      "output": {
+        "summary": "Compressed 1705 tokens of prior context to 640 tokens. Retained: user question, KB article ID, draft response outline. Dropped: full KB text, search metadata."
+      }
     },
     {
-      "step": 4,
       "type": "llm",
       "name": "reason",
-      "input_summary": "Refine draft response after compaction (working from compressed context)",
-      "output_summary": "Revised response but changed step 3 from 'verify via backup email' to 'verify via SMS' — a detail lost in compaction",
-      "tokens_in": 1280,
-      "tokens_out": 380,
-      "latency_ms": 2400,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 1280,
+        "tokens_out": 380,
+        "latency_ms": 2400
+      },
+      "idx": 4,
+      "input": {
+        "summary": "Refine draft response after compaction (working from compressed context)"
+      },
+      "output": {
+        "summary": "Revised response but changed step 3 from 'verify via backup email' to 'verify via SMS' \u2014 a detail lost in compaction"
+      }
     },
     {
-      "step": 5,
       "type": "judge",
       "name": "verify",
-      "input_summary": "Check final response against KB-2041 ground truth",
-      "output_summary": "FAIL: Step 3 says SMS verification but KB-2041 specifies backup email only. SMS is not a supported verification method for MFA reset.",
-      "tokens_in": 1660,
-      "tokens_out": 115,
-      "latency_ms": 1300,
       "status": "fail",
-      "judge_score": 0.40
+      "judge_score": 0.4,
+      "metrics": {
+        "tokens_in": 1660,
+        "tokens_out": 115,
+        "latency_ms": 1300
+      },
+      "idx": 5,
+      "input": {
+        "summary": "Check final response against KB-2041 ground truth"
+      },
+      "output": {
+        "summary": "FAIL: Step 3 says SMS verification but KB-2041 specifies backup email only. SMS is not a supported verification method for MFA reset."
+      }
     }
   ],
   "result": {
     "success": false,
-    "score": 0.40,
+    "score": 0.4,
     "label": "fail",
     "error_type": "compaction_drift",
     "summary": "Compaction dropped the specific verification method detail; agent substituted SMS for backup email, causing factual error"

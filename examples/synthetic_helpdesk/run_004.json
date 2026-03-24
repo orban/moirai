@@ -6,62 +6,95 @@
   "model": "claude-3.7-sonnet",
   "harness": "baseline_v1",
   "timestamp": "2026-03-24T10:20:00Z",
-  "tags": {"dataset": "helpdesk_mini", "cohort": "baseline"},
+  "tags": {
+    "dataset": "helpdesk_mini",
+    "cohort": "baseline"
+  },
   "steps": [
     {
-      "step": 0,
       "type": "llm",
       "name": "plan",
-      "input_summary": "User reports VPN connection drops every 10 minutes on macOS Sequoia",
-      "output_summary": "Plan: search docs for VPN timeout issues on macOS",
-      "tokens_in": 680,
-      "tokens_out": 175,
-      "latency_ms": 1100,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 680,
+        "tokens_out": 175,
+        "latency_ms": 1100
+      },
+      "idx": 0,
+      "input": {
+        "summary": "User reports VPN connection drops every 10 minutes on macOS Sequoia"
+      },
+      "output": {
+        "summary": "Plan: search docs for VPN timeout issues on macOS"
+      }
     },
     {
-      "step": 1,
       "type": "tool",
       "name": "search_docs",
-      "input_summary": "Query: VPN timeout disconnect macOS",
-      "output_summary": "Found doc: KB-3102 VPN Troubleshooting but it only covers Windows. No macOS-specific results.",
-      "tokens_in": 175,
-      "tokens_out": 390,
-      "latency_ms": 780,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 175,
+        "tokens_out": 390,
+        "latency_ms": 780
+      },
+      "idx": 1,
+      "input": {
+        "summary": "Query: VPN timeout disconnect macOS"
+      },
+      "output": {
+        "summary": "Found doc: KB-3102 VPN Troubleshooting but it only covers Windows. No macOS-specific results."
+      }
     },
     {
-      "step": 2,
       "type": "tool",
       "name": "search_docs",
-      "input_summary": "Query: VPN macOS Sequoia connection drops",
-      "output_summary": "No relevant results found. Returned KB-3102 again.",
-      "tokens_in": 565,
-      "tokens_out": 340,
-      "latency_ms": 810,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 565,
+        "tokens_out": 340,
+        "latency_ms": 810
+      },
+      "idx": 2,
+      "input": {
+        "summary": "Query: VPN macOS Sequoia connection drops"
+      },
+      "output": {
+        "summary": "No relevant results found. Returned KB-3102 again."
+      }
     },
     {
-      "step": 3,
       "type": "tool",
       "name": "search_docs",
-      "input_summary": "Query: VPN keep-alive macOS network timeout",
-      "output_summary": "No relevant results found. Returned KB-3102 again.",
-      "tokens_in": 905,
-      "tokens_out": 320,
-      "latency_ms": 750,
-      "status": "ok"
+      "status": "ok",
+      "metrics": {
+        "tokens_in": 905,
+        "tokens_out": 320,
+        "latency_ms": 750
+      },
+      "idx": 3,
+      "input": {
+        "summary": "Query: VPN keep-alive macOS network timeout"
+      },
+      "output": {
+        "summary": "No relevant results found. Returned KB-3102 again."
+      }
     },
     {
-      "step": 4,
       "type": "error",
       "name": "loop_detected",
-      "input_summary": "Harness detected 3 consecutive search_docs calls returning the same document",
-      "output_summary": "Terminated run: retrieval loop with no new information after 3 attempts",
-      "tokens_in": 0,
-      "tokens_out": 0,
-      "latency_ms": 50,
-      "status": "fail"
+      "status": "fail",
+      "metrics": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "latency_ms": 50
+      },
+      "idx": 4,
+      "input": {
+        "summary": "Harness detected 3 consecutive search_docs calls returning the same document"
+      },
+      "output": {
+        "summary": "Terminated run: retrieval loop with no new information after 3 attempts"
+      }
     }
   ],
   "result": {
