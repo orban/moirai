@@ -3,7 +3,7 @@ from __future__ import annotations
 from rich.console import Console
 from rich.table import Table
 
-from moirai.schema import Run, RunSummary, ValidationResult
+from moirai.schema import ClusterResult, Run, RunSummary, ValidationResult
 
 console = Console()
 
@@ -132,3 +132,31 @@ def print_trace(run: Run, expand: bool = False) -> None:
                 console.print(f"  [bold]Input:[/bold] {step.input}")
             if step.output:
                 console.print(f"  [bold]Output:[/bold] {step.output}")
+
+
+def print_clusters(result: ClusterResult) -> None:
+    """Print cluster summary matching spec output format."""
+    if not result.clusters:
+        console.print("No clusters found.")
+        return
+
+    for info in result.clusters:
+        console.print(f"[bold]Cluster {info.cluster_id}[/bold]")
+        console.print(f"  count: {info.count}")
+
+        if info.success_rate is not None:
+            console.print(f"  success: {info.success_rate:.1%}")
+        else:
+            console.print("  success: N/A")
+
+        # Type-only prototype for readability
+        types_only = " > ".join(
+            part.split(":")[0] for part in info.prototype.split(" > ")
+        ) if info.prototype else "(empty)"
+        console.print(f"  prototype: {types_only}")
+
+        if info.error_types:
+            errors = ", ".join(f"{k}: {v}" for k, v in info.error_types.items())
+            console.print(f"  errors: {errors}")
+
+        console.print()

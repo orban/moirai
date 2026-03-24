@@ -116,3 +116,24 @@ def trace(
     from moirai.viz.terminal import print_trace
 
     print_trace(runs[0], expand=expand)
+
+
+@app.command()
+def clusters(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    level: str = typer.Option("type", help="Sequence level: type or name"),
+    threshold: float = typer.Option(0.3, help="Clustering distance threshold"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    model: str | None = typer.Option(None, help="Filter by model"),
+    harness: str | None = typer.Option(None, help="Filter by harness"),
+    task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
+    html: Path | None = typer.Option(None, help="Write HTML output to path"),
+) -> None:
+    """Cluster runs by trajectory structure."""
+    runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
+
+    from moirai.analyze.cluster import cluster_runs
+    from moirai.viz.terminal import print_clusters
+
+    result = cluster_runs(runs, level=level, threshold=threshold)
+    print_clusters(result)

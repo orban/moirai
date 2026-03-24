@@ -72,6 +72,22 @@ class ValidationResult:
     errors: list[str] = field(default_factory=list)
 
 
+@dataclass
+class ClusterInfo:
+    cluster_id: int
+    count: int
+    success_rate: float | None
+    prototype: str
+    avg_length: float
+    error_types: dict[str, int]
+
+
+@dataclass
+class ClusterResult:
+    clusters: list[ClusterInfo]
+    labels: dict[str, int]  # run_id -> cluster_id
+
+
 # --- Sequence extraction (analysis primitives, not normalization) ---
 
 def step_type_sequence(run: Run) -> list[str]:
