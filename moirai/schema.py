@@ -72,6 +72,25 @@ class ValidationResult:
     errors: list[str] = field(default_factory=list)
 
 
+GAP = "-"
+
+
+@dataclass
+class Alignment:
+    """Matrix of aligned step values across runs."""
+    run_ids: list[str]
+    matrix: list[list[str]]  # [run_index][column_index] = value or GAP
+    level: str  # "type" or "name"
+
+
+@dataclass
+class DivergencePoint:
+    column: int
+    value_counts: dict[str, int]
+    entropy: float
+    success_by_value: dict[str, float | None]
+
+
 @dataclass
 class ClusterInfo:
     cluster_id: int

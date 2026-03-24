@@ -137,3 +137,25 @@ def clusters(
 
     result = cluster_runs(runs, level=level, threshold=threshold)
     print_clusters(result)
+
+
+@app.command()
+def branch(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    level: str = typer.Option("type", help="Sequence level: type or name"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    model: str | None = typer.Option(None, help="Filter by model"),
+    harness: str | None = typer.Option(None, help="Filter by harness"),
+    task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
+    html: Path | None = typer.Option(None, help="Write HTML output to path"),
+) -> None:
+    """Multi-run divergence analysis."""
+    runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
+
+    from moirai.analyze.align import align_runs
+    from moirai.analyze.divergence import find_divergence_points
+    from moirai.viz.terminal import print_divergence
+
+    alignment = align_runs(runs, level=level)
+    points = find_divergence_points(alignment, runs)
+    print_divergence(points)

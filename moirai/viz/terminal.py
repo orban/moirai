@@ -3,7 +3,7 @@ from __future__ import annotations
 from rich.console import Console
 from rich.table import Table
 
-from moirai.schema import ClusterResult, Run, RunSummary, ValidationResult
+from moirai.schema import ClusterResult, DivergencePoint, Run, RunSummary, ValidationResult
 
 console = Console()
 
@@ -159,4 +159,22 @@ def print_clusters(result: ClusterResult) -> None:
             errors = ", ".join(f"{k}: {v}" for k, v in info.error_types.items())
             console.print(f"  errors: {errors}")
 
+        console.print()
+
+
+def print_divergence(points: list[DivergencePoint]) -> None:
+    """Print divergence points matching spec output format."""
+    if not points:
+        console.print("No divergence points found (all runs have identical trajectories).")
+        return
+
+    console.print("[bold]Top divergence points:[/bold]")
+    for point in points:
+        console.print(f"col={point.column} entropy={point.entropy:.2f}")
+        for value, count in sorted(point.value_counts.items(), key=lambda x: -x[1]):
+            rate = point.success_by_value.get(value)
+            if rate is not None:
+                console.print(f"  {value}: {count} runs, success {rate:.1%}")
+            else:
+                console.print(f"  {value}: {count} runs, success N/A")
         console.print()
