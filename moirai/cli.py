@@ -138,6 +138,11 @@ def clusters(
     result = cluster_runs(runs, level=level, threshold=threshold)
     print_clusters(result)
 
+    if html:
+        from moirai.viz.html import write_clusters_html
+        out = write_clusters_html(result, html)
+        console.print(f"\nHTML written to {out}")
+
 
 @app.command()
 def branch(
@@ -159,6 +164,11 @@ def branch(
     alignment = align_runs(runs, level=level)
     points = find_divergence_points(alignment, runs)
     print_divergence(points)
+
+    if html:
+        from moirai.viz.html import write_branch_html
+        out = write_branch_html(alignment, points, runs, html)
+        console.print(f"\nHTML written to {out}")
 
 
 @app.command()
@@ -207,6 +217,11 @@ def diff(
     a_label = " ".join(a)
     b_label = " ".join(b)
     print_diff(result, a_label, b_label)
+
+    if html:
+        from moirai.viz.html import write_diff_html
+        out = write_diff_html(result, a_label, b_label, html)
+        console.print(f"\nHTML written to {out}")
 
 
 def _show_available_values(runs: list[Run], kv_pairs: list[str]) -> None:
