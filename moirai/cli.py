@@ -39,7 +39,15 @@ def _load_and_filter(
     harness: str | None = None,
     task_family: str | None = None,
 ) -> list[Run]:
-    runs, warnings = load_runs(path, strict=strict)
+    if not path.exists():
+        err_console.print(f"[red]error:[/red] path not found: {path}")
+        raise typer.Exit(1)
+
+    try:
+        runs, warnings = load_runs(path, strict=strict)
+    except (FileNotFoundError, ValueError) as e:
+        err_console.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1)
     _print_warnings(warnings)
 
     if not runs:
@@ -188,19 +196,18 @@ def diff(
         raise typer.Exit(2)
 
     # Load all runs
-    runs, warnings = load_runs(path, strict=strict)
-    _print_warnings(warnings)
-
-    if not runs:
-        err_console.print("[red]error:[/red] no valid runs found")
-        raise typer.Exit(1)
+    runs = _load_and_filter(path, strict)
 
     from moirai.filters import apply_kv_filters
     from moirai.analyze.compare import compare_cohorts
     from moirai.viz.terminal import print_diff
 
-    a_runs = apply_kv_filters(runs, a)
-    b_runs = apply_kv_filters(runs, b)
+    try:
+        a_runs = apply_kv_filters(runs, a)
+        b_runs = apply_kv_filters(runs, b)
+    except ValueError as e:
+        err_console.print(f"[red]error:[/red] invalid filter: {e}")
+        raise typer.Exit(2)
 
     if not a_runs:
         # Show available values for the filter keys

@@ -63,7 +63,9 @@ def _nw_align(
 def _get_sequence(run: Run, level: str) -> list[str]:
     if level == "name":
         return step_name_sequence(run)
-    return step_type_sequence(run)
+    if level == "type":
+        return step_type_sequence(run)
+    raise ValueError(f"invalid level '{level}', expected 'type' or 'name'")
 
 
 def trajectory_distance(run_a: Run, run_b: Run, level: str = "type") -> float:
