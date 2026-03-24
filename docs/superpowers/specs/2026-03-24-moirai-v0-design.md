@@ -209,7 +209,7 @@ class DivergencePoint:
     column: int
     value_counts: dict[str, int]     # e.g. {"judge": 14, "tool": 8}
     entropy: float
-    success_by_value: dict[str, float]  # e.g. {"judge": 0.929, "tool": 0.375}
+    success_by_value: dict[str, float | None]  # None if all runs in branch have success=None
 
 @dataclass
 class RunSummary:
@@ -247,9 +247,9 @@ class CohortDiff:
     avg_tokens_in_delta: float
     avg_tokens_out_delta: float
     avg_latency_delta: float
-    a_only_signatures: list[tuple[str, int]]
-    b_only_signatures: list[tuple[str, int]]
-    cluster_shifts: list[tuple[str, int]]  # (cluster_label, count_delta)
+    a_only_signatures: list[tuple[str, int]]  # pre-clustering: (signature, count) unique to A
+    b_only_signatures: list[tuple[str, int]]  # pre-clustering: (signature, count) unique to B
+    cluster_shifts: list[tuple[str, int]]  # post-clustering: (cluster_label, count_delta)
 ```
 
 ---
@@ -326,7 +326,7 @@ A column is a divergence point if it contains more than one distinct non-gap val
 trajectory_distance(run_a: Run, run_b: Run, level: str = "type") -> float
 ```
 
-Default: normalized edit distance over step sequences. Hand-rolled implementation (~20 lines) operating on `list[str]`, not character strings. No external dependency needed — the Needleman-Wunsch implementation for alignment provides the same edit distance computation. Normalized by dividing by the length of the longer sequence. Range: [0.0, 1.0].
+Default: normalized edit distance over step sequences. Hand-rolled implementation (~20 lines) operating on `list[str]`, not character strings. Implementation: run the NW alignment on two sequences, then count non-match columns (mismatches + gaps) in the traceback, divide by alignment length. This reuses the NW code from `align.py`. Range: [0.0, 1.0].
 
 Secondary: type+name hybrid (weight type 0.7, name 0.3).
 
