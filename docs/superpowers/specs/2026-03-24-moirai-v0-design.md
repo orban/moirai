@@ -176,14 +176,81 @@ class Run:
 
 **Missing status:** Default to `"ok"`.
 
-**Missing result (strict mode):** Reject the file. **Non-strict:** Infer `success=false` if any error step exists, otherwise `success=null`.
+**Status values:** Freeform string field. Convention: `"ok"` for success, `"error"` for failure. A step can be `type="tool", status="error"` (a tool call that failed) — this is distinct from `type="error"` (a system-level error event). The success-inference rule uses `type="error"` only: if any step has `type="error"`, infer `success=false`.
 
-**Metric normalization:** Flatten nested metric structures into `tokens_in`, `tokens_out`, `latency_ms`.
+**Missing result (strict mode):** Reject the file. **Non-strict:** Infer `success=false` if any step has `type="error"`, otherwise `success=null`.
+
+**Metric normalization:** Flatten nested metric structures into `tokens_in`, `tokens_out`, `latency_ms`. Metric values are numeric (`int | float`).
 
 **Sequence signature:** Compute for each run:
 - Type sequence: `["llm", "tool", "llm", "judge"]`
 - Name sequence: `["plan", "retrieve_docs", "reason", "verify"]`
 - Compact signature: `llm:plan > tool:retrieve_docs > llm:reason > judge:verify`
+
+---
+
+## Analysis types
+
+These types are shared across analysis modules. Defined in `schema.py` alongside Run/Step/Result.
+
+```python
+GAP = "-"  # sentinel for alignment gaps
+
+@dataclass
+class Alignment:
+    """Matrix of aligned step values. columns[i] is a dict mapping run_id to the
+    step value (type or name string) at that aligned position, or GAP."""
+    run_ids: list[str]
+    columns: list[dict[str, str]]  # list of {run_id: value_or_GAP}
+    level: str  # "type" or "name"
+
+@dataclass
+class DivergencePoint:
+    column: int
+    value_counts: dict[str, int]     # e.g. {"judge": 14, "tool": 8}
+    entropy: float
+    success_by_value: dict[str, float]  # e.g. {"judge": 0.929, "tool": 0.375}
+
+@dataclass
+class RunSummary:
+    run_count: int
+    success_rate: float | None  # None if all results are null
+    avg_steps: float
+    median_steps: float
+    avg_tokens_in: float
+    avg_tokens_out: float
+    avg_latency_ms: float
+    top_signatures: list[tuple[str, int]]  # (signature, count) descending
+    error_counts: dict[str, int]
+
+@dataclass
+class ClusterInfo:
+    cluster_id: int
+    label: str           # derived from prototype, e.g. "llm>tool>llm>judge"
+    count: int
+    success_rate: float | None
+    prototype: str       # most common signature in the cluster
+    avg_length: float
+    error_types: dict[str, int]
+
+@dataclass
+class ClusterResult:
+    clusters: list[ClusterInfo]
+    labels: dict[str, int]  # run_id -> cluster_id
+
+@dataclass
+class CohortDiff:
+    a_summary: RunSummary
+    b_summary: RunSummary
+    success_rate_delta: float | None
+    avg_steps_delta: float
+    avg_tokens_in_delta: float
+    avg_tokens_out_delta: float
+    avg_latency_delta: float
+    a_only_signatures: list[tuple[str, int]]
+    b_only_signatures: list[tuple[str, int]]
+    cluster_shifts: list[tuple[str, int]]  # (cluster_label, count_delta)
+```
 
 ---
 
@@ -195,7 +262,7 @@ class Run:
 summarize_runs(runs: list[Run]) -> RunSummary
 ```
 
-Outputs: run count, success rate, avg/median steps, avg tokens in/out, avg latency, top signatures, error type counts.
+Runs with `success=None` are excluded from success rate calculations. If all runs have `success=None`, `success_rate` is `None`.
 
 ### Sequence extraction
 
@@ -211,7 +278,7 @@ signature(run: Run) -> str
 filter_runs(runs, model=None, harness=None, task_family=None, tags=None) -> list[Run]
 ```
 
-Exact match on model/harness/task_family. Key-value match on tags.
+Exact match on model/harness/task_family. Key-value match on tags. All filters are AND'd — a run must match every specified filter.
 
 ### Alignment
 
@@ -233,7 +300,17 @@ Example output:
 | 3   | judge | llm   | judge |
 | 4   | -     | judge | -     |
 
-For pairwise alignment: standard Needleman-Wunsch with match=1, mismatch=-1, gap=-1. For multi-run alignment: progressive alignment — align most similar pair first, then align remaining runs against the consensus.
+**Pairwise alignment:** Needleman-Wunsch with match=+1, mismatch=-1, gap=-1.
+
+**Multi-run alignment (progressive):**
+1. Compute pairwise distance matrix for all runs.
+2. Find the closest pair, align them.
+3. Build a consensus sequence from the alignment: at each column, take the majority non-gap value. Ties broken by first occurrence.
+4. Align the next closest run against the consensus. Update the consensus with the new alignment.
+5. Repeat until all runs are incorporated.
+6. Produce the final Alignment by mapping each run back through its alignment to the consensus.
+
+Order-dependence is acceptable for v0 — the progressive approach is deterministic given a fixed distance metric, and the results are good enough for divergence detection at this scale.
 
 ### Divergence detection
 
@@ -241,7 +318,7 @@ For pairwise alignment: standard Needleman-Wunsch with match=1, mismatch=-1, gap
 find_divergence_points(alignment: Alignment) -> list[DivergencePoint]
 ```
 
-Each point includes: column index, value frequencies, entropy, downstream success rates per branch value.
+A column is a divergence point if it contains more than one distinct non-gap value. Points are sorted by entropy descending. Downstream success is computed by partitioning runs by their value at that column and computing success rate per partition.
 
 ### Distance
 
@@ -249,7 +326,9 @@ Each point includes: column index, value frequencies, entropy, downstream succes
 trajectory_distance(run_a: Run, run_b: Run, level: str = "type") -> float
 ```
 
-Default: normalized Levenshtein distance over step type sequence. Secondary: type+name hybrid (weight type 0.7, name 0.3).
+Default: normalized edit distance over step sequences. Hand-rolled implementation (~20 lines) operating on `list[str]`, not character strings. No external dependency needed — the Needleman-Wunsch implementation for alignment provides the same edit distance computation. Normalized by dividing by the length of the longer sequence. Range: [0.0, 1.0].
+
+Secondary: type+name hybrid (weight type 0.7, name 0.3).
 
 ### Clustering
 
@@ -257,7 +336,9 @@ Default: normalized Levenshtein distance over step type sequence. Secondary: typ
 cluster_runs(runs: list[Run], level: str = "type", method: str = "agglomerative", threshold: float = 0.3) -> ClusterResult
 ```
 
-Pairwise distance matrix → agglomerative clustering with user-specified threshold. Each cluster reports: id, count, success rate, prototype signature, avg length, error types.
+Pairwise distance matrix → agglomerative clustering with user-specified threshold via `scipy.cluster.hierarchy`.
+
+Cluster labels are derived from the prototype signature (most common signature in the cluster), e.g. `"llm>tool>llm>judge"`. In diff output, these labels identify clusters across cohorts. If two cohorts produce clusters with the same prototype, they're treated as the same behavior mode for the purpose of computing shifts.
 
 ### Cohort diff
 
@@ -265,7 +346,7 @@ Pairwise distance matrix → agglomerative clustering with user-specified thresh
 compare_cohorts(a_runs: list[Run], b_runs: list[Run]) -> CohortDiff
 ```
 
-Outputs: success rate delta, avg steps delta, avg tokens delta, avg latency delta, cluster distribution delta, divergence point shifts, signatures unique to each cohort.
+Clusters both cohorts independently, then matches clusters by prototype label to compute shifts. Unmatched clusters appear as unique to their cohort.
 
 ---
 
@@ -284,6 +365,20 @@ moirai clusters <dir>         # Cluster runs by trajectory structure
 moirai diff <dir> --a K=V --b K=V  # Compare two cohorts
 ```
 
+### validate checks
+
+In order:
+1. Valid JSON (parseable)
+2. Required run fields present: `run_id`, `task_id`, `steps`, `result`
+3. `steps` is a list, each step has `idx`, `type`, `name`
+4. `result` is an object with `success` field (bool or null)
+5. Step types are known or normalizable (warn on unknown, don't reject)
+6. `idx` values are integers (warn if missing, will be assigned during normalization)
+
+Output: pass/fail per file, with warnings for non-fatal issues. In `--strict` mode, warnings become failures.
+
+No JSON Schema file or validation library — manual dict checking against the rules above. Keeps dependencies minimal.
+
 ### Common flags
 
 - `--level type|name` (default: type)
@@ -296,12 +391,14 @@ moirai diff <dir> --a K=V --b K=V  # Compare two cohorts
 
 **clusters:** `--threshold 0.3`
 
-**diff:** `--a harness=baseline_v1 --b harness=router_v2`
+**diff:** `--a K=V --b K=V`
+
+The `--a` and `--b` flags each take a single `K=V` string. `K` must be one of the named filter fields (`model`, `harness`, `task_family`) or a tag key (looked up in `tags`). Named fields are checked first; if no match, it's treated as a tag filter. Each flag can be passed multiple times to apply multiple filters (AND'd). Example: `--a harness=baseline_v1 --a model=claude-3.7-sonnet --b harness=router_v2`.
 
 ### Input conventions
 
 - Single file: `run.json`
-- Directory: `runs/*.json` (recursive)
+- Directory: `runs/*.json` (recursive, follows filesystem, does not follow symlinks)
 - Invalid files: warn and skip (unless `--strict`)
 
 ---
@@ -399,9 +496,9 @@ Avg steps: 8.9 -> 6.1 (-2.8)
 Avg tokens out: 891 -> 624 (-267)
 
 Cluster shifts:
-  direct_solve: +9 runs
-  retrieval_loop: -6 runs
-  compaction_drift: -2 runs
+  llm>tool>llm>judge: +9 runs
+  llm>tool>tool>tool>error: -6 runs
+  llm>compaction>llm>judge: -2 runs
 
 Largest divergence change:
   col=2 tool branch frequency dropped from 61.9% to 23.8%
@@ -449,7 +546,10 @@ moirai/
     synthetic_codefix/
 
   tests/
+    test_schema.py
+    test_load.py
     test_normalize.py
+    test_filters.py
     test_distance.py
     test_align.py
     test_cluster.py
@@ -503,6 +603,10 @@ Branch graph (Sankey), cluster charts, diff plots via Plotly.
 - `plotly` — HTML visualizations
 - `scipy` — agglomerative clustering
 - `numpy` — distance matrices
+
+Edit distance and Needleman-Wunsch alignment are hand-rolled (~20 lines each) operating on `list[str]`. No external string-distance library needed.
+
+Validation is manual dict checking. No pydantic or jsonschema dependency.
 
 No other dependencies for v0.
 
