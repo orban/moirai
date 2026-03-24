@@ -1,0 +1,87 @@
+{
+  "run_id": "run_008",
+  "task_id": "task_helpdesk_003",
+  "task_family": "helpdesk",
+  "agent": "support_agent",
+  "model": "claude-4-opus",
+  "harness": "router_v2",
+  "timestamp": "2026-03-24T10:50:10Z",
+  "tags": {"dataset": "helpdesk_mini", "cohort": "router_experiment"},
+  "steps": [
+    {
+      "step": 0,
+      "type": "llm",
+      "name": "plan",
+      "input_summary": "User needs to check remaining PTO balance and submit a time-off request for next Friday",
+      "output_summary": "Plan: query HR API for PTO balance, compose response with balance and submission steps",
+      "tokens_in": 640,
+      "tokens_out": 210,
+      "latency_ms": 1780,
+      "status": "ok"
+    },
+    {
+      "step": 1,
+      "type": "tool",
+      "name": "call_api",
+      "input_summary": "GET /hr/pto/balance?employee_id=emp_4821",
+      "output_summary": "HTTP 502 Bad Gateway. Upstream HR service returned invalid response.",
+      "tokens_in": 210,
+      "tokens_out": 105,
+      "latency_ms": 3800,
+      "status": "error",
+      "error_detail": "http_502_bad_gateway"
+    },
+    {
+      "step": 2,
+      "type": "llm",
+      "name": "retry_reason",
+      "input_summary": "HR API returned 502. Evaluate whether to retry.",
+      "output_summary": "502 indicates upstream issue, likely transient. Retrying once before falling back to cached data.",
+      "tokens_in": 955,
+      "tokens_out": 148,
+      "latency_ms": 1350,
+      "status": "ok"
+    },
+    {
+      "step": 3,
+      "type": "tool",
+      "name": "call_api",
+      "input_summary": "GET /hr/pto/balance?employee_id=emp_4821 (retry attempt 1)",
+      "output_summary": "HTTP 200 OK. Balance: 12 days remaining. Accrued: 1.5 days/month.",
+      "tokens_in": 148,
+      "tokens_out": 245,
+      "latency_ms": 1480,
+      "status": "ok"
+    },
+    {
+      "step": 4,
+      "type": "llm",
+      "name": "reason",
+      "input_summary": "Synthesize PTO balance data with time-off request workflow",
+      "output_summary": "Drafted reply: 12 days remaining, walk-through of request submission via HR portal, confirmation that manager approval takes ~24h",
+      "tokens_in": 1400,
+      "tokens_out": 320,
+      "latency_ms": 2340,
+      "status": "ok"
+    },
+    {
+      "step": 5,
+      "type": "judge",
+      "name": "verify",
+      "input_summary": "Validate PTO balance and submission steps against API data and HR procedure docs",
+      "output_summary": "Balance correct. Submission steps accurate. Approval timeline matches HR SLA.",
+      "tokens_in": 1720,
+      "tokens_out": 78,
+      "latency_ms": 1180,
+      "status": "ok",
+      "judge_score": 0.96
+    }
+  ],
+  "result": {
+    "success": true,
+    "score": 0.96,
+    "label": "pass",
+    "error_type": null,
+    "summary": "Recovered from 502 gateway error on retry; provided accurate PTO balance and detailed submission workflow"
+  }
+}

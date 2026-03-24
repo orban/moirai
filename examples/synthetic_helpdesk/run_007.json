@@ -1,0 +1,87 @@
+{
+  "run_id": "run_007",
+  "task_id": "task_helpdesk_003",
+  "task_family": "helpdesk",
+  "agent": "support_agent",
+  "model": "claude-3.7-sonnet",
+  "harness": "router_v2",
+  "timestamp": "2026-03-24T10:42:00Z",
+  "tags": {"dataset": "helpdesk_mini", "cohort": "router_experiment"},
+  "steps": [
+    {
+      "step": 0,
+      "type": "llm",
+      "name": "plan",
+      "input_summary": "User needs to check remaining PTO balance and submit a time-off request for next Friday",
+      "output_summary": "Plan: call HR API to fetch PTO balance, then help user submit the request",
+      "tokens_in": 610,
+      "tokens_out": 190,
+      "latency_ms": 1050,
+      "status": "ok"
+    },
+    {
+      "step": 1,
+      "type": "tool",
+      "name": "call_api",
+      "input_summary": "GET /hr/pto/balance?employee_id=emp_4821",
+      "output_summary": "HTTP 503 Service Unavailable. HR API is temporarily down for maintenance.",
+      "tokens_in": 190,
+      "tokens_out": 120,
+      "latency_ms": 4200,
+      "status": "error",
+      "error_detail": "http_503_service_unavailable"
+    },
+    {
+      "step": 2,
+      "type": "llm",
+      "name": "retry_reason",
+      "input_summary": "HR API returned 503. Decide whether to retry or use fallback.",
+      "output_summary": "503 is transient. Will retry once after brief pause. If it fails again, suggest user check HR portal directly.",
+      "tokens_in": 920,
+      "tokens_out": 165,
+      "latency_ms": 980,
+      "status": "ok"
+    },
+    {
+      "step": 3,
+      "type": "tool",
+      "name": "call_api",
+      "input_summary": "GET /hr/pto/balance?employee_id=emp_4821 (retry attempt 1)",
+      "output_summary": "HTTP 200 OK. Balance: 12 days remaining. Accrued: 1.5 days/month.",
+      "tokens_in": 165,
+      "tokens_out": 250,
+      "latency_ms": 1650,
+      "status": "ok"
+    },
+    {
+      "step": 4,
+      "type": "llm",
+      "name": "reason",
+      "input_summary": "Format PTO balance info and draft time-off request guidance",
+      "output_summary": "Drafted reply: user has 12 days PTO remaining, provided steps to submit request for next Friday via HR portal",
+      "tokens_in": 1335,
+      "tokens_out": 290,
+      "latency_ms": 1580,
+      "status": "ok"
+    },
+    {
+      "step": 5,
+      "type": "judge",
+      "name": "verify",
+      "input_summary": "Check response accuracy against API data and HR submission procedure",
+      "output_summary": "PTO balance matches API response. Submission steps align with HR portal workflow.",
+      "tokens_in": 1625,
+      "tokens_out": 82,
+      "latency_ms": 1020,
+      "status": "ok",
+      "judge_score": 0.94
+    }
+  ],
+  "result": {
+    "success": true,
+    "score": 0.94,
+    "label": "pass",
+    "error_type": null,
+    "summary": "Successfully recovered from transient API failure on retry and provided accurate PTO balance with submission instructions"
+  }
+}

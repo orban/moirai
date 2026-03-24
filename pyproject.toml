@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moirai"
+version = "0.1.0"
+description = "Trajectory-level debugging for stochastic agent systems"
+requires-python = ">=3.11"
+dependencies = [
+  "typer>=0.9",
+  "rich>=13.0",
+  "plotly>=5.0",
+  "scipy>=1.11",
+  "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-cov"]
+
+[project.scripts]
+moirai = "moirai.cli:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
