@@ -92,6 +92,15 @@ class DivergencePoint:
 
 
 @dataclass
+class CohortDiff:
+    a_summary: RunSummary
+    b_summary: RunSummary
+    a_only_signatures: list[tuple[str, int]]  # pre-clustering
+    b_only_signatures: list[tuple[str, int]]  # pre-clustering
+    cluster_shifts: list[tuple[str, int]]     # post-clustering: (prototype, count_delta)
+
+
+@dataclass
 class ClusterInfo:
     cluster_id: int
     count: int

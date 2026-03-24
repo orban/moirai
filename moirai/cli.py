@@ -159,3 +159,73 @@ def branch(
     alignment = align_runs(runs, level=level)
     points = find_divergence_points(alignment, runs)
     print_divergence(points)
+
+
+@app.command()
+def diff(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    a: list[str] | None = typer.Option(None, "--a", help="Cohort A filter (K=V, repeatable)"),
+    b: list[str] | None = typer.Option(None, "--b", help="Cohort B filter (K=V, repeatable)"),
+    level: str = typer.Option("type", help="Sequence level: type or name"),
+    threshold: float = typer.Option(0.3, help="Clustering distance threshold"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    html: Path | None = typer.Option(None, help="Write HTML output to path"),
+) -> None:
+    """Compare two cohorts."""
+    if not a or not b:
+        err_console.print("[red]error:[/red] both --a and --b filters are required")
+        err_console.print("example: moirai diff runs/ --a harness=baseline --b harness=router")
+        raise typer.Exit(2)
+
+    # Load all runs
+    runs, warnings = load_runs(path, strict=strict)
+    _print_warnings(warnings)
+
+    if not runs:
+        err_console.print("[red]error:[/red] no valid runs found")
+        raise typer.Exit(1)
+
+    from moirai.filters import apply_kv_filters
+    from moirai.analyze.compare import compare_cohorts
+    from moirai.viz.terminal import print_diff
+
+    a_runs = apply_kv_filters(runs, a)
+    b_runs = apply_kv_filters(runs, b)
+
+    if not a_runs:
+        # Show available values for the filter keys
+        err_console.print(f"[red]error:[/red] cohort A matched 0 runs")
+        _show_available_values(runs, a)
+        raise typer.Exit(1)
+
+    if not b_runs:
+        err_console.print(f"[red]error:[/red] cohort B matched 0 runs")
+        _show_available_values(runs, b)
+        raise typer.Exit(1)
+
+    result = compare_cohorts(a_runs, b_runs, level=level, threshold=threshold)
+    a_label = " ".join(a)
+    b_label = " ".join(b)
+    print_diff(result, a_label, b_label)
+
+
+def _show_available_values(runs: list[Run], kv_pairs: list[str]) -> None:
+    """Show available values for filter keys to help the user."""
+    from moirai.filters import parse_kv_filter
+
+    for kv in kv_pairs:
+        try:
+            key, _ = parse_kv_filter(kv)
+        except ValueError:
+            continue
+
+        values: set[str] = set()
+        for run in runs:
+            val = getattr(run, key, None)
+            if val is None:
+                val = run.tags.get(key)
+            if val is not None:
+                values.add(str(val))
+
+        if values:
+            err_console.print(f"  available {key} values: {', '.join(sorted(values))}")

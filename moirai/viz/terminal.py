@@ -3,7 +3,7 @@ from __future__ import annotations
 from rich.console import Console
 from rich.table import Table
 
-from moirai.schema import ClusterResult, DivergencePoint, Run, RunSummary, ValidationResult
+from moirai.schema import ClusterResult, CohortDiff, DivergencePoint, Run, RunSummary, ValidationResult
 
 console = Console()
 
@@ -178,3 +178,55 @@ def print_divergence(points: list[DivergencePoint]) -> None:
             else:
                 console.print(f"  {value}: {count} runs, success N/A")
         console.print()
+
+
+def _fmt_delta(a: float | None, b: float | None, fmt: str = ".1f", suffix: str = "") -> str:
+    if a is None or b is None:
+        return "N/A"
+    delta = b - a
+    sign = "+" if delta >= 0 else ""
+    return f"{a:{fmt}}{suffix} -> {b:{fmt}}{suffix} ({sign}{delta:{fmt}})"
+
+
+def _fmt_rate_delta(a: float | None, b: float | None) -> str:
+    if a is None or b is None:
+        return "N/A"
+    delta = b - a
+    sign = "+" if delta >= 0 else ""
+    return f"{a:.1%} -> {b:.1%} ({sign}{delta * 100:.1f})"
+
+
+def print_diff(diff: CohortDiff, a_label: str, b_label: str) -> None:
+    """Print cohort diff matching spec output format."""
+    a = diff.a_summary
+    b = diff.b_summary
+
+    console.print(f"[bold]Cohort A:[/bold] {a_label} ({a.run_count} runs)")
+    console.print(f"[bold]Cohort B:[/bold] {b_label} ({b.run_count} runs)")
+    console.print()
+
+    console.print(f"Success rate: {_fmt_rate_delta(a.success_rate, b.success_rate)}")
+    console.print(f"Avg steps: {_fmt_delta(a.avg_steps, b.avg_steps)}")
+    console.print(f"Avg tokens in: {_fmt_delta(a.avg_tokens_in, b.avg_tokens_in, '.0f')}")
+    console.print(f"Avg tokens out: {_fmt_delta(a.avg_tokens_out, b.avg_tokens_out, '.0f')}")
+
+    if diff.cluster_shifts:
+        console.print("\n[bold]Cluster shifts:[/bold]")
+        for proto, delta in diff.cluster_shifts:
+            types_only = " > ".join(
+                part.split(":")[0] for part in proto.split(" > ")
+            ) if proto else "(empty)"
+            sign = "+" if delta > 0 else ""
+            console.print(f"  {types_only}: {sign}{delta} runs")
+
+    if diff.a_only_signatures:
+        console.print(f"\n[bold]Signatures only in A:[/bold]")
+        for sig, count in diff.a_only_signatures[:5]:
+            types_only = " > ".join(part.split(":")[0] for part in sig.split(" > "))
+            console.print(f"  {types_only} ({count})")
+
+    if diff.b_only_signatures:
+        console.print(f"\n[bold]Signatures only in B:[/bold]")
+        for sig, count in diff.b_only_signatures[:5]:
+            types_only = " > ".join(part.split(":")[0] for part in sig.split(" > "))
+            console.print(f"  {types_only} ({count})")

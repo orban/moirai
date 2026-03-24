@@ -30,3 +30,46 @@ def filter_runs(
                 continue
         result.append(run)
     return result
+
+
+NAMED_FIELDS = {"model", "harness", "task_family"}
+
+
+def parse_kv_filter(kv: str) -> tuple[str, str]:
+    """Parse a 'key=value' string into (key, value).
+
+    Raises ValueError if the string doesn't contain '='.
+    """
+    if "=" not in kv:
+        raise ValueError(f"invalid filter format '{kv}', expected key=value")
+    key, value = kv.split("=", 1)
+    if not key:
+        raise ValueError(f"invalid filter format '{kv}', empty key")
+    return key, value
+
+
+def apply_kv_filters(runs: list[Run], kv_pairs: list[str]) -> list[Run]:
+    """Apply a list of K=V filter strings to runs.
+
+    Named fields (model, harness, task_family) are matched directly.
+    Unknown keys are treated as tag filters.
+    All filters are AND'd.
+    """
+    model = None
+    harness = None
+    task_family = None
+    tags: dict[str, str] = {}
+
+    for kv in kv_pairs:
+        key, value = parse_kv_filter(kv)
+        if key == "model":
+            model = value
+        elif key == "harness":
+            harness = value
+        elif key == "task_family":
+            task_family = value
+        else:
+            tags[key] = value
+
+    return filter_runs(runs, model=model, harness=harness, task_family=task_family,
+                       tags=tags if tags else None)
