@@ -101,7 +101,7 @@ def summary(
     from moirai.viz.terminal import print_summary
 
     result = summarize_runs(runs)
-    print_summary(result)
+    print_summary(result, runs)
 
 
 @app.command()
@@ -144,7 +144,7 @@ def clusters(
     from moirai.viz.terminal import print_clusters
 
     result = cluster_runs(runs, level=level, threshold=threshold)
-    print_clusters(result)
+    print_clusters(result, runs)
 
     if html:
         from moirai.viz.html import write_clusters_html
@@ -171,7 +171,7 @@ def branch(
 
     alignment = align_runs(runs, level=level)
     points = find_divergence_points(alignment, runs)
-    print_divergence(points)
+    print_divergence(points, runs, alignment)
 
     if html:
         from moirai.viz.html import write_branch_html

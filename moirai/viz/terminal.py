@@ -3,7 +3,20 @@ from __future__ import annotations
 from rich.console import Console
 from rich.table import Table
 
-from moirai.schema import ClusterResult, CohortDiff, DivergencePoint, Run, RunSummary, ValidationResult
+from moirai.compress import (
+    compress_phases,
+    compress_run,
+    cluster_subpatterns,
+    phase_summary_str,
+)
+from moirai.schema import (
+    ClusterResult,
+    CohortDiff,
+    DivergencePoint,
+    Run,
+    RunSummary,
+    ValidationResult,
+)
 
 console = Console()
 
@@ -32,8 +45,8 @@ def print_validation(results: list[ValidationResult]) -> None:
     console.print(f"\n{passed} passed, {failed} failed, {len(results)} total")
 
 
-def print_summary(summary: RunSummary) -> None:
-    """Print aggregate run summary matching spec output format."""
+def print_summary(summary: RunSummary, runs: list[Run] | None = None) -> None:
+    """Print aggregate run summary."""
     console.print(f"Runs: {summary.run_count}")
 
     if summary.success_rate is not None:
@@ -54,21 +67,32 @@ def print_summary(summary: RunSummary) -> None:
     else:
         console.print("Avg latency: N/A")
 
-    if summary.top_signatures:
+    if summary.top_signatures and runs:
+        # Build signature -> compressed mapping from actual runs
+        from moirai.schema import signature as sig_fn
+        sig_to_compressed: dict[str, str] = {}
+        for run in runs:
+            s = sig_fn(run)
+            if s not in sig_to_compressed:
+                sig_to_compressed[s] = compress_run(run)
+
+        console.print("\nTop patterns:")
+        for i, (sig, count) in enumerate(summary.top_signatures[:10], 1):
+            display = sig_to_compressed.get(sig, sig[:80])
+            console.print(f"  {i}. {display}  [dim]({count})[/dim]")
+    elif summary.top_signatures:
         console.print("\nTop signatures:")
-        for i, (sig, count) in enumerate(summary.top_signatures, 1):
-            # Show type-only signature for readability
-            types_only = " > ".join(part.split(":")[0] for part in sig.split(" > ")) if sig else "(empty)"
-            console.print(f"{i}. {types_only} ({count})")
+        for i, (sig, count) in enumerate(summary.top_signatures[:10], 1):
+            console.print(f"  {i}. {sig[:80]}  [dim]({count})[/dim]")
 
     if summary.error_counts:
         console.print("\nErrors:")
         for error_type, count in sorted(summary.error_counts.items(), key=lambda x: -x[1]):
-            console.print(f"{error_type}: {count}")
+            console.print(f"  {error_type}: {count}")
 
 
 def print_trace(run: Run, expand: bool = False) -> None:
-    """Print a single run trace as a Rich table."""
+    """Print a single run trace."""
     # Metadata
     console.print(f"[bold]Run:[/bold] {run.run_id}")
     console.print(f"[bold]Task:[/bold] {run.task_id}")
@@ -99,6 +123,10 @@ def print_trace(run: Run, expand: bool = False) -> None:
     if run.result.summary:
         console.print(f"[bold]Summary:[/bold] {run.result.summary}")
 
+    # Compressed trajectory
+    console.print(f"\n[bold]Trajectory:[/bold] {compress_run(run)}")
+    console.print(f"[bold]Phases:[/bold] {compress_phases(run)}")
+    console.print(f"[bold]Mix:[/bold] {phase_summary_str(run)}")
     console.print()
 
     # Step table
@@ -134,50 +162,151 @@ def print_trace(run: Run, expand: bool = False) -> None:
                 console.print(f"  [bold]Output:[/bold] {step.output}")
 
 
-def print_clusters(result: ClusterResult) -> None:
-    """Print cluster summary matching spec output format."""
+def _compress_prototype(proto: str) -> str:
+    """Compress a raw signature prototype for display."""
+    # Prototypes are in "type:name > type:name" format
+    # Extract just the names and compress
+    parts = proto.split(" > ")
+    names = [p.split(":")[-1] if ":" in p else p for p in parts]
+    # RLE
+    if not names:
+        return "(empty)"
+    from moirai.compress import _rle, _format_rle
+    return _format_rle(_rle(names))
+
+
+def print_clusters(result: ClusterResult, runs: list[Run] | None = None) -> None:
+    """Print cluster summary with compressed signatures and sub-patterns."""
     if not result.clusters:
         console.print("No clusters found.")
         return
 
-    for info in result.clusters:
-        console.print(f"[bold]Cluster {info.cluster_id}[/bold]")
-        console.print(f"  count: {info.count}")
+    # Build run lookup if we have runs
+    run_map: dict[str, Run] = {}
+    if runs:
+        run_map = {r.run_id: r for r in runs}
 
-        if info.success_rate is not None:
-            console.print(f"  success: {info.success_rate:.1%}")
+    for info in sorted(result.clusters, key=lambda c: -c.count):
+        rate_str = f"{info.success_rate:.0%}" if info.success_rate is not None else "N/A"
+        console.print(f"[bold]Cluster {info.cluster_id}[/bold]: {info.count} runs, {rate_str} success")
+
+        if run_map:
+            cluster_runs_list = [run_map[rid] for rid, cid in result.labels.items()
+                                 if cid == info.cluster_id and rid in run_map]
+            if cluster_runs_list:
+                # Show phase pattern from a representative run (median length)
+                sorted_by_len = sorted(cluster_runs_list, key=lambda r: len(r.steps))
+                representative = sorted_by_len[len(sorted_by_len) // 2]
+                phases = compress_phases(representative)
+                if len(phases) > 80:
+                    phases = phases[:77] + "..."
+                console.print(f"  [cyan]{phases}[/cyan]")
+
+                # Phase mix for the cluster
+                from collections import Counter
+                from moirai.compress import phase_summary as ps
+                merged: Counter[str] = Counter()
+                for r in cluster_runs_list:
+                    merged.update(ps(r))
+                total = sum(merged.values())
+                if total:
+                    mix = ", ".join(f"{c/total:.0%} {p}" for p, c in merged.most_common(4))
+                    console.print(f"  [dim]{mix}[/dim]")
+
+                # Sub-patterns
+                groups = cluster_subpatterns(cluster_runs_list)
+                for pattern_name, pattern_runs in sorted(groups.items(), key=lambda x: -len(x[1])):
+                    if len(pattern_runs) == 0:
+                        continue
+                    n = len(pattern_runs)
+                    successes = sum(1 for r in pattern_runs if r.result.success)
+                    rate = f"{successes/n:.0%}" if n > 0 else "N/A"
+                    avg_steps = sum(len(r.steps) for r in pattern_runs) / n
+                    label = pattern_name.replace("_", " ")
+                    example = compress_run(pattern_runs[0])
+                    if len(example) > 60:
+                        example = example[:57] + "..."
+                    console.print(f"    {label} ({n}, {rate}, ~{avg_steps:.0f} steps): {example}")
         else:
-            console.print("  success: N/A")
-
-        # Type-only prototype for readability
-        types_only = " > ".join(
-            part.split(":")[0] for part in info.prototype.split(" > ")
-        ) if info.prototype else "(empty)"
-        console.print(f"  prototype: {types_only}")
+            # Fallback: compress the raw prototype
+            console.print(f"  [cyan]{_compress_prototype(info.prototype)}[/cyan]")
 
         if info.error_types:
             errors = ", ".join(f"{k}: {v}" for k, v in info.error_types.items())
-            console.print(f"  errors: {errors}")
+            console.print(f"  [red]Errors: {errors}[/red]")
 
         console.print()
 
 
-def print_divergence(points: list[DivergencePoint]) -> None:
-    """Print divergence points matching spec output format."""
+def print_divergence(
+    points: list[DivergencePoint],
+    runs: list[Run] | None = None,
+    alignment: object | None = None,
+) -> None:
+    """Print divergence points with context narratives."""
     if not points:
         console.print("No divergence points found (all runs have identical trajectories).")
         return
 
-    console.print("[bold]Top divergence points:[/bold]")
-    for point in points:
-        console.print(f"col={point.column} entropy={point.entropy:.2f}")
+    # Build run lookup
+    run_map: dict[str, Run] = {}
+    if runs:
+        run_map = {r.run_id: r for r in runs}
+
+    console.print(f"[bold]Top divergence points ({len(points)} found):[/bold]\n")
+
+    for point in points[:8]:  # top 8
+        console.print(f"[bold]Position {point.column}[/bold] (entropy {point.entropy:.2f})")
+
         for value, count in sorted(point.value_counts.items(), key=lambda x: -x[1]):
             rate = point.success_by_value.get(value)
-            if rate is not None:
-                console.print(f"  {value}: {count} runs, success {rate:.1%}")
+            rate_str = f"{rate:.0%}" if rate is not None else "N/A"
+
+            # Color by success rate
+            if rate is not None and rate >= 0.7:
+                color = "green"
+            elif rate is not None and rate <= 0.3:
+                color = "red"
             else:
-                console.print(f"  {value}: {count} runs, success N/A")
+                color = "yellow"
+
+            console.print(f"  [{color}]{value}[/{color}]: {count} runs, {rate_str} success")
+
+            # Show representative run context if we have runs and alignment
+            if run_map and alignment and hasattr(alignment, 'matrix') and hasattr(alignment, 'run_ids'):
+                _print_branch_context(point, value, alignment, run_map)
+
         console.print()
+
+
+def _print_branch_context(
+    point: DivergencePoint,
+    value: str,
+    alignment: object,
+    run_map: dict[str, Run],
+) -> None:
+    """Show context window around a divergence for one branch."""
+    from moirai.schema import GAP
+
+    # Find runs that took this branch
+    run_ids = alignment.run_ids  # type: ignore
+    matrix = alignment.matrix  # type: ignore
+    branch_rids: list[str] = []
+
+    for run_idx, rid in enumerate(run_ids):
+        if run_idx < len(matrix) and point.column < len(matrix[run_idx]):
+            if matrix[run_idx][point.column] == value:
+                branch_rids.append(rid)
+
+    if not branch_rids or branch_rids[0] not in run_map:
+        return
+
+    # Show compressed trajectory of first representative run
+    rep_run = run_map[branch_rids[0]]
+    compressed = compress_run(rep_run)
+    if len(compressed) > 60:
+        compressed = compressed[:57] + "..."
+    console.print(f"    [dim]e.g. {rep_run.run_id[:30]}... → {compressed}[/dim]")
 
 
 def _fmt_delta(a: float | None, b: float | None, fmt: str = ".1f", suffix: str = "") -> str:
@@ -197,7 +326,7 @@ def _fmt_rate_delta(a: float | None, b: float | None) -> str:
 
 
 def print_diff(diff: CohortDiff, a_label: str, b_label: str) -> None:
-    """Print cohort diff matching spec output format."""
+    """Print cohort diff with compressed signatures."""
     a = diff.a_summary
     b = diff.b_summary
 
@@ -213,20 +342,25 @@ def print_diff(diff: CohortDiff, a_label: str, b_label: str) -> None:
     if diff.cluster_shifts:
         console.print("\n[bold]Cluster shifts:[/bold]")
         for proto, delta in diff.cluster_shifts:
-            types_only = " > ".join(
-                part.split(":")[0] for part in proto.split(" > ")
-            ) if proto else "(empty)"
+            compressed = _compress_prototype(proto)
+            if len(compressed) > 50:
+                compressed = compressed[:47] + "..."
             sign = "+" if delta > 0 else ""
-            console.print(f"  {types_only}: {sign}{delta} runs")
+            color = "green" if delta > 0 else "red"
+            console.print(f"  {compressed}: [{color}]{sign}{delta} runs[/{color}]")
 
     if diff.a_only_signatures:
-        console.print(f"\n[bold]Signatures only in A:[/bold]")
+        console.print(f"\n[bold]Patterns only in A:[/bold]")
         for sig, count in diff.a_only_signatures[:5]:
-            types_only = " > ".join(part.split(":")[0] for part in sig.split(" > "))
-            console.print(f"  {types_only} ({count})")
+            compressed = _compress_prototype(sig)
+            if len(compressed) > 60:
+                compressed = compressed[:57] + "..."
+            console.print(f"  {compressed}  [dim]({count})[/dim]")
 
     if diff.b_only_signatures:
-        console.print(f"\n[bold]Signatures only in B:[/bold]")
+        console.print(f"\n[bold]Patterns only in B:[/bold]")
         for sig, count in diff.b_only_signatures[:5]:
-            types_only = " > ".join(part.split(":")[0] for part in sig.split(" > "))
-            console.print(f"  {types_only} ({count})")
+            compressed = _compress_prototype(sig)
+            if len(compressed) > 60:
+                compressed = compressed[:57] + "..."
+            console.print(f"  {compressed}  [dim]({count})[/dim]")
