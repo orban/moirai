@@ -115,3 +115,26 @@ class TestDiffCommand:
         result = runner.invoke(app, ["diff", str(tmp_path), "--a", "harness=baseline", "--b", "harness=nonexistent"])
         assert result.exit_code == 1
         assert "0 runs" in result.output
+
+
+class TestExplainCommand:
+    def test_explain_found(self, tmp_path):
+        _write_run(tmp_path, "a.json", "r1")
+        _write_run(tmp_path, "b.json", "r2", success=False)
+        _write_run(tmp_path, "c.json", "r3")
+        result = runner.invoke(app, ["explain", str(tmp_path), "--run", "r1"])
+        assert result.exit_code == 0
+        assert "Run:" in result.output
+        assert "Trajectory:" in result.output
+
+    def test_explain_prefix_match(self, tmp_path):
+        _write_run(tmp_path, "a.json", "long-run-id-001")
+        result = runner.invoke(app, ["explain", str(tmp_path), "--run", "long-run"])
+        assert result.exit_code == 0
+        assert "long-run-id-001" in result.output
+
+    def test_explain_not_found(self, tmp_path):
+        _write_run(tmp_path, "a.json", "r1")
+        result = runner.invoke(app, ["explain", str(tmp_path), "--run", "nonexistent"])
+        assert result.exit_code == 1
+        assert "not found" in result.output
