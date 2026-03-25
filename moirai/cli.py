@@ -231,6 +231,153 @@ def diff(
         console.print(f"\nHTML written to {out}")
 
 
+@app.command()
+def explain(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    run_id: str = typer.Option(..., "--run", help="Run ID to explain"),
+    level: str = typer.Option("type", help="Sequence level: type or name"),
+    threshold: float = typer.Option(0.3, help="Clustering distance threshold"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+) -> None:
+    """Explain why a specific run succeeded or failed compared to similar runs."""
+    all_runs = _load_and_filter(path, strict)
+
+    # Find the target run
+    target = None
+    for r in all_runs:
+        if r.run_id == run_id or r.run_id.startswith(run_id):
+            target = r
+            break
+
+    if target is None:
+        err_console.print(f"[red]error:[/red] run '{run_id}' not found")
+        # Show available run IDs
+        err_console.print("available runs:")
+        for r in all_runs[:20]:
+            s = "PASS" if r.result.success else "FAIL"
+            err_console.print(f"  {r.run_id} [{s}]")
+        if len(all_runs) > 20:
+            err_console.print(f"  ... and {len(all_runs) - 20} more")
+        raise typer.Exit(1)
+
+    from moirai.analyze.cluster import cluster_runs as do_cluster
+    from moirai.analyze.align import align_runs
+    from moirai.analyze.divergence import find_divergence_points
+    from moirai.compress import compress_run, compress_phases, phase_summary_str
+
+    # Cluster
+    cluster_result = do_cluster(all_runs, level=level, threshold=threshold)
+    target_cluster_id = cluster_result.labels.get(target.run_id)
+
+    # Get cluster siblings
+    siblings = [r for r in all_runs if cluster_result.labels.get(r.run_id) == target_cluster_id]
+    cluster_info = None
+    for c in cluster_result.clusters:
+        if c.cluster_id == target_cluster_id:
+            cluster_info = c
+            break
+
+    # Header
+    success = target.result.success
+    if success is True:
+        result_tag = "[green]PASS[/green]"
+    elif success is False:
+        result_tag = "[red]FAIL[/red]"
+    else:
+        result_tag = "[yellow]UNKNOWN[/yellow]"
+
+    console.print(f"[bold]Run:[/bold] {target.run_id} {result_tag}")
+    console.print(f"[bold]Task:[/bold] {target.task_id}")
+    if target.model:
+        console.print(f"[bold]Model:[/bold] {target.model}")
+    if target.harness:
+        console.print(f"[bold]Harness:[/bold] {target.harness}")
+
+    if cluster_info:
+        rate_str = f"{cluster_info.success_rate:.0%}" if cluster_info.success_rate is not None else "N/A"
+        console.print(f"[bold]Cluster:[/bold] {cluster_info.cluster_id} ({cluster_info.count} runs, {rate_str} success)")
+
+    # Trajectory
+    console.print(f"\n[bold]Trajectory:[/bold] {compress_run(target)}")
+    console.print(f"[bold]Phases:[/bold] {compress_phases(target)}")
+    console.print(f"[bold]Mix:[/bold] {phase_summary_str(target)}")
+    console.print(f"[bold]Steps:[/bold] {len(target.steps)}")
+
+    if target.result.error_type:
+        console.print(f"[bold]Error:[/bold] [red]{target.result.error_type}[/red]")
+    if target.result.summary:
+        console.print(f"[bold]Summary:[/bold] {target.result.summary}")
+
+    # Comparison to cluster
+    if siblings and len(siblings) > 1:
+        avg_steps = sum(len(r.steps) for r in siblings) / len(siblings)
+        pct_diff = ((len(target.steps) - avg_steps) / avg_steps * 100) if avg_steps > 0 else 0
+
+        console.print(f"\n[bold]Compared to cluster:[/bold]")
+        if abs(pct_diff) > 20:
+            direction = "shorter" if pct_diff < 0 else "longer"
+            console.print(f"  This run is {abs(pct_diff):.0f}% {direction} than cluster average ({avg_steps:.0f} steps)")
+
+        pass_siblings = [r for r in siblings if r.result.success]
+        fail_siblings = [r for r in siblings if r.result.success is False]
+
+        if target.result.success and fail_siblings:
+            console.print(f"\n  [bold]In failing runs from this cluster ({len(fail_siblings)}):[/bold]")
+            avg_fail_steps = sum(len(r.steps) for r in fail_siblings) / len(fail_siblings)
+            console.print(f"    avg {avg_fail_steps:.0f} steps (vs {len(target.steps)} in this run)")
+            # Show compressed example of a failing run
+            example = compress_run(fail_siblings[0])
+            if len(example) > 70:
+                example = example[:67] + "..."
+            console.print(f"    e.g. {example}")
+
+        elif not target.result.success and pass_siblings:
+            console.print(f"\n  [bold]In passing runs from this cluster ({len(pass_siblings)}):[/bold]")
+            avg_pass_steps = sum(len(r.steps) for r in pass_siblings) / len(pass_siblings)
+            console.print(f"    avg {avg_pass_steps:.0f} steps (vs {len(target.steps)} in this run)")
+            example = compress_run(pass_siblings[0])
+            if len(example) > 70:
+                example = example[:67] + "..."
+            console.print(f"    e.g. {example}")
+
+    # Key divergence — align siblings and find where this run splits
+    if siblings and len(siblings) >= 3:
+        alignment = align_runs(siblings, level=level)
+        points = find_divergence_points(alignment, siblings)
+
+        if points:
+            # Find the divergence point most relevant to this run's outcome
+            best_point = None
+            best_spread = 0.0
+            target_idx = alignment.run_ids.index(target.run_id) if target.run_id in alignment.run_ids else None
+
+            for point in points[:10]:
+                if target_idx is not None and point.column < len(alignment.matrix[target_idx]):
+                    target_val = alignment.matrix[target_idx][point.column]
+                    target_rate = point.success_by_value.get(target_val)
+                    if target_rate is not None:
+                        # How much does this branch differ from the overall?
+                        other_rates = [r for v, r in point.success_by_value.items()
+                                       if v != target_val and r is not None]
+                        if other_rates:
+                            spread = abs(target_rate - sum(other_rates) / len(other_rates))
+                            if spread > best_spread:
+                                best_spread = spread
+                                best_point = point
+
+            if best_point and target_idx is not None:
+                target_val = alignment.matrix[target_idx][best_point.column]
+                target_rate = best_point.success_by_value.get(target_val)
+
+                console.print(f"\n[bold]Key divergence (position {best_point.column}):[/bold]")
+                for value, count in sorted(best_point.value_counts.items(), key=lambda x: -x[1]):
+                    rate = best_point.success_by_value.get(value)
+                    rate_str = f"{rate:.0%}" if rate is not None else "N/A"
+                    marker = " [bold]<-- this run[/bold]" if value == target_val else ""
+                    color = "green" if rate and rate >= 0.7 else ("red" if rate is not None and rate <= 0.3 else "yellow")
+                    console.print(f"  [{color}]{value}[/{color}]: {count} runs, {rate_str} success{marker}")
+
+
 def _show_available_values(runs: list[Run], kv_pairs: list[str]) -> None:
     """Show available values for filter keys to help the user."""
     from moirai.filters import parse_kv_filter
