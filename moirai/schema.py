@@ -89,6 +89,10 @@ class DivergencePoint:
     value_counts: dict[str, int]
     entropy: float
     success_by_value: dict[str, float | None]
+    # Added in v1: quality metrics
+    p_value: float | None = None          # Fisher's exact test: does branch predict outcome?
+    min_branch_size: int = 0              # smallest branch count — low = unstable
+    phase_context: str | None = None      # e.g. "explore→[modify] vs explore→[explore]"
 
 
 @dataclass

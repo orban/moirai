@@ -1,7 +1,5 @@
 """Tests for divergence detection."""
 
-import math
-
 from moirai.schema import Alignment, GAP, Step, Result, Run
 from moirai.analyze.divergence import find_divergence_points
 from moirai.analyze.align import align_runs
@@ -42,7 +40,8 @@ class TestDivergencePoints:
         runs = [_make_run("r1", ["llm", "judge"], True),
                 _make_run("r2", ["llm", "tool"], False),
                 _make_run("r3", ["llm", "judge"], True)]
-        points = find_divergence_points(alignment, runs)
+        # min_branch_size=1 to test with small fixtures
+        points = find_divergence_points(alignment, runs, min_branch_size=1, p_threshold=1.0)
         assert len(points) == 1
         assert points[0].column == 1
         assert points[0].value_counts == {"judge": 2, "tool": 1}
@@ -57,9 +56,8 @@ class TestDivergencePoints:
             level="type",
         )
         runs = [_make_run("r1", ["llm"]), _make_run("r2", ["tool"])]
-        points = find_divergence_points(alignment, runs)
+        points = find_divergence_points(alignment, runs, min_branch_size=1, p_threshold=1.0)
         assert len(points) == 1
-        # Two equally frequent values: entropy = 1.0
         assert abs(points[0].entropy - 1.0) < 0.01
 
     def test_success_correlation(self):
@@ -77,10 +75,68 @@ class TestDivergencePoints:
                 _make_run("r2", ["llm", "judge"], True),
                 _make_run("r3", ["llm", "tool"], False),
                 _make_run("r4", ["llm", "tool"], False)]
-        points = find_divergence_points(alignment, runs)
+        points = find_divergence_points(alignment, runs, min_branch_size=1, p_threshold=1.0)
         assert len(points) == 1
         assert points[0].success_by_value["judge"] == 1.0
         assert points[0].success_by_value["tool"] == 0.0
+
+    def test_significance_filtering(self):
+        """Points where branch doesn't predict outcome get filtered by p_threshold."""
+        alignment = Alignment(
+            run_ids=["r1", "r2", "r3", "r4"],
+            matrix=[
+                ["llm", "judge"],
+                ["llm", "judge"],
+                ["llm", "tool"],
+                ["llm", "tool"],
+            ],
+            level="type",
+        )
+        # Branch doesn't predict outcome: one pass one fail in each branch
+        runs = [_make_run("r1", ["llm", "judge"], True),
+                _make_run("r2", ["llm", "judge"], False),
+                _make_run("r3", ["llm", "tool"], True),
+                _make_run("r4", ["llm", "tool"], False)]
+        # p-value should be 1.0 (perfectly independent) — filtered at 0.05
+        points = find_divergence_points(alignment, runs, min_branch_size=1, p_threshold=0.05)
+        assert len(points) == 0
+
+    def test_min_branch_size_filtering(self):
+        """Points with tiny branches get filtered."""
+        alignment = Alignment(
+            run_ids=["r1", "r2", "r3"],
+            matrix=[
+                ["llm", "judge"],
+                ["llm", "tool"],
+                ["llm", "judge"],
+            ],
+            level="type",
+        )
+        runs = [_make_run("r1", ["llm", "judge"], True),
+                _make_run("r2", ["llm", "tool"], False),
+                _make_run("r3", ["llm", "judge"], True)]
+        # tool branch has only 1 run — filtered at min_branch_size=2
+        points = find_divergence_points(alignment, runs, min_branch_size=2, p_threshold=1.0)
+        assert len(points) == 0
+
+    def test_phase_context_populated(self):
+        alignment = Alignment(
+            run_ids=["r1", "r2", "r3", "r4"],
+            matrix=[
+                ["read", "edit"],
+                ["read", "edit"],
+                ["read", "search"],
+                ["read", "search"],
+            ],
+            level="name",
+        )
+        runs = [_make_run("r1", ["read", "edit"], True),
+                _make_run("r2", ["read", "edit"], True),
+                _make_run("r3", ["read", "search"], False),
+                _make_run("r4", ["read", "search"], False)]
+        points = find_divergence_points(alignment, runs, min_branch_size=1, p_threshold=1.0)
+        assert len(points) == 1
+        assert points[0].phase_context is not None
 
     def test_all_null_success_partition(self):
         alignment = Alignment(
@@ -92,12 +148,12 @@ class TestDivergencePoints:
             level="type",
         )
         runs = [_make_run("r1", ["llm"], None), _make_run("r2", ["tool"], None)]
-        points = find_divergence_points(alignment, runs)
+        points = find_divergence_points(alignment, runs, min_branch_size=1, p_threshold=1.0)
         assert len(points) == 1
         assert points[0].success_by_value["llm"] is None
         assert points[0].success_by_value["tool"] is None
 
-    def test_sorted_by_entropy_descending(self):
+    def test_sorted_by_significance(self):
         alignment = Alignment(
             run_ids=["r1", "r2", "r3", "r4"],
             matrix=[
@@ -108,11 +164,15 @@ class TestDivergencePoints:
             ],
             level="type",
         )
-        runs = [_make_run(f"r{i+1}", ["x"] * 3) for i in range(4)]
-        points = find_divergence_points(alignment, runs)
-        # Should be sorted by entropy descending
-        for i in range(len(points) - 1):
-            assert points[i].entropy >= points[i + 1].entropy
+        runs = [_make_run("r1", ["x"] * 3, True),
+                _make_run("r2", ["x"] * 3, False),
+                _make_run("r3", ["x"] * 3, True),
+                _make_run("r4", ["x"] * 3, False)]
+        points = find_divergence_points(alignment, runs, min_branch_size=1, p_threshold=1.0)
+        # Should be sorted by p_value ascending (most significant first)
+        p_values = [p.p_value or 1.0 for p in points]
+        for i in range(len(p_values) - 1):
+            assert p_values[i] <= p_values[i + 1] + 0.01
 
     def test_empty_alignment(self):
         alignment = Alignment(run_ids=[], matrix=[], level="type")

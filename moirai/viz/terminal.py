@@ -310,8 +310,14 @@ def print_cluster_divergence(
         console.print(f"  [dim]Aligned to {n_cols} columns, {avg_gaps:.0%} avg gaps, {len(points)} divergence points[/dim]")
 
         # Show top 3 divergence points for this cluster
+        run_lookup = {r.run_id: r for r in cluster_runs_list}
         for point in points[:3]:
-            console.print(f"\n  [bold]Position {point.column}[/bold] (entropy {point.entropy:.2f})")
+            p_str = f", p={point.p_value:.3f}" if point.p_value is not None else ""
+            console.print(f"\n  [bold]Position {point.column}[/bold] (entropy {point.entropy:.2f}{p_str})")
+
+            if point.phase_context:
+                console.print(f"  [dim]{point.phase_context}[/dim]")
+
             for value, count in sorted(point.value_counts.items(), key=lambda x: -x[1]):
                 rate = point.success_by_value.get(value)
                 rate_str = f"{rate:.0%}" if rate is not None else "N/A"
@@ -323,9 +329,8 @@ def print_cluster_divergence(
                     color = "yellow"
                 console.print(f"    [{color}]{value}[/{color}]: {count} runs, {rate_str} success")
 
-                # Context window
                 if alignment and hasattr(alignment, 'matrix'):
-                    _print_branch_context(point, value, alignment, {r.run_id: r for r in cluster_runs_list})
+                    _print_branch_context(point, value, alignment, run_lookup)
 
         console.print()
 
