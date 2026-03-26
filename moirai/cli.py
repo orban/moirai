@@ -155,27 +155,44 @@ def clusters(
 @app.command()
 def branch(
     path: Path = typer.Argument(..., help="Path to a run file or directory"),
-    level: str = typer.Option("type", help="Sequence level: type or name"),
+    threshold: float = typer.Option(0.3, help="Clustering distance threshold"),
     strict: bool = typer.Option(False, help="Treat warnings as errors"),
     model: str | None = typer.Option(None, help="Filter by model"),
     harness: str | None = typer.Option(None, help="Filter by harness"),
     task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
     html: Path | None = typer.Option(None, help="Write HTML output to path"),
 ) -> None:
-    """Multi-run divergence analysis."""
+    """Multi-run divergence analysis. Clusters first, then aligns within each cluster."""
     runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
 
+    from moirai.analyze.cluster import cluster_runs
     from moirai.analyze.align import align_runs
     from moirai.analyze.divergence import find_divergence_points
-    from moirai.viz.terminal import print_divergence
+    from moirai.viz.terminal import print_cluster_divergence
 
-    alignment = align_runs(runs, level=level)
-    points = find_divergence_points(alignment, runs)
-    print_divergence(points, runs, alignment)
+    # Cluster at type level (broad grouping), then align within clusters at name level (fine detail)
+    cluster_result = cluster_runs(runs, level="type", threshold=threshold)
+    run_map = {r.run_id: r for r in runs}
 
-    if html:
+    cluster_divergences = []
+    for info in sorted(cluster_result.clusters, key=lambda c: -c.count):
+        if info.count < 3:
+            continue  # need at least 3 runs for meaningful alignment
+
+        cluster_runs_list = [run_map[rid] for rid, cid in cluster_result.labels.items()
+                             if cid == info.cluster_id and rid in run_map]
+
+        alignment = align_runs(cluster_runs_list, level="name")
+        points = find_divergence_points(alignment, cluster_runs_list)
+        cluster_divergences.append((info, alignment, points, cluster_runs_list))
+
+    print_cluster_divergence(cluster_divergences)
+
+    if html and cluster_divergences:
+        # Use the largest cluster for the HTML view
+        biggest = cluster_divergences[0]
         from moirai.viz.html import write_branch_html
-        out = write_branch_html(alignment, points, runs, html)
+        out = write_branch_html(biggest[1], biggest[2], biggest[3], html)
         console.print(f"\nHTML written to {out}")
 
 
@@ -340,9 +357,9 @@ def explain(
                 example = example[:67] + "..."
             console.print(f"    e.g. {example}")
 
-    # Key divergence — align siblings and find where this run splits
+    # Key divergence — align siblings at name level for fine-grained detail
     if siblings and len(siblings) >= 3:
-        alignment = align_runs(siblings, level=level)
+        alignment = align_runs(siblings, level="name")
         points = find_divergence_points(alignment, siblings)
 
         if points:

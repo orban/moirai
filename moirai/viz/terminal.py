@@ -273,6 +273,63 @@ def print_clusters(result: ClusterResult, runs: list[Run] | None = None) -> None
         console.print()
 
 
+def print_cluster_divergence(
+    cluster_divergences: list[tuple],
+) -> None:
+    """Print per-cluster divergence analysis.
+
+    Each tuple is (ClusterInfo, Alignment, list[DivergencePoint], list[Run]).
+    """
+    if not cluster_divergences:
+        console.print("No clusters with enough runs for divergence analysis.")
+        return
+
+    for info, alignment, points, cluster_runs_list in cluster_divergences:
+        rate_str = f"{info.success_rate:.0%}" if info.success_rate is not None else "N/A"
+        console.print(f"[bold]Cluster {info.cluster_id}[/bold]: {info.count} runs, {rate_str} success")
+
+        # Show phase pattern
+        sorted_by_len = sorted(cluster_runs_list, key=lambda r: len(r.steps))
+        representative = sorted_by_len[len(sorted_by_len) // 2]
+        phases = compress_phases(representative)
+        console.print(f"  [cyan]{_truncate_middle(phases, 80)}[/cyan]")
+
+        if not points:
+            console.print("  [dim]No divergence points (all runs follow the same path)[/dim]")
+            console.print()
+            continue
+
+        # Alignment quality stats
+        n_cols = len(alignment.matrix[0]) if alignment.matrix and alignment.matrix[0] else 0
+        avg_gaps = 0.0
+        if alignment.matrix and n_cols > 0:
+            avg_gaps = sum(
+                sum(1 for v in row if v == "-") / n_cols
+                for row in alignment.matrix
+            ) / len(alignment.matrix)
+        console.print(f"  [dim]Aligned to {n_cols} columns, {avg_gaps:.0%} avg gaps, {len(points)} divergence points[/dim]")
+
+        # Show top 3 divergence points for this cluster
+        for point in points[:3]:
+            console.print(f"\n  [bold]Position {point.column}[/bold] (entropy {point.entropy:.2f})")
+            for value, count in sorted(point.value_counts.items(), key=lambda x: -x[1]):
+                rate = point.success_by_value.get(value)
+                rate_str = f"{rate:.0%}" if rate is not None else "N/A"
+                if rate is not None and rate >= 0.7:
+                    color = "green"
+                elif rate is not None and rate <= 0.3:
+                    color = "red"
+                else:
+                    color = "yellow"
+                console.print(f"    [{color}]{value}[/{color}]: {count} runs, {rate_str} success")
+
+                # Context window
+                if alignment and hasattr(alignment, 'matrix'):
+                    _print_branch_context(point, value, alignment, {r.run_id: r for r in cluster_runs_list})
+
+        console.print()
+
+
 def print_divergence(
     points: list[DivergencePoint],
     runs: list[Run] | None = None,
