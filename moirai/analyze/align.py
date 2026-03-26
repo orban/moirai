@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from moirai.schema import Alignment, GAP, Run, step_type_sequence, step_name_sequence
+from moirai.schema import Alignment, GAP, Run, step_type_sequence
 
 
 def _nw_align(
@@ -60,9 +60,12 @@ def _nw_align(
     return aligned_a, aligned_b
 
 
+NOISE_NAMES = {"error_observation", "action"}
+
+
 def _get_sequence(run: Run, level: str) -> list[str]:
     if level == "name":
-        return step_name_sequence(run)
+        return [s.name for s in run.steps if s.name not in NOISE_NAMES]
     if level == "type":
         return step_type_sequence(run)
     raise ValueError(f"invalid level '{level}', expected 'type' or 'name'")
