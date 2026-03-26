@@ -189,11 +189,34 @@ def branch(
     print_cluster_divergence(cluster_divergences)
 
     if html and cluster_divergences:
-        # Use the largest cluster for the HTML view
         biggest = cluster_divergences[0]
         from moirai.viz.html import write_branch_html
         out = write_branch_html(biggest[1], biggest[2], biggest[3], html)
         console.print(f"\nHTML written to {out}")
+
+
+@app.command()
+def patterns(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    min_n: int = typer.Option(3, help="Minimum pattern length"),
+    max_n: int = typer.Option(5, help="Maximum pattern length"),
+    min_count: int = typer.Option(3, help="Minimum runs containing pattern"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    model: str | None = typer.Option(None, help="Filter by model"),
+    harness: str | None = typer.Option(None, help="Filter by harness"),
+    task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
+) -> None:
+    """Find step patterns that predict success or failure."""
+    runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
+
+    from moirai.analyze.motifs import find_motifs
+    from moirai.viz.terminal import print_motifs
+
+    motifs = find_motifs(runs, min_n=min_n, max_n=max_n, min_count=min_count)
+
+    known = [r for r in runs if r.result.success is not None]
+    baseline = sum(1 for r in known if r.result.success) / len(known) if known else 0.0
+    print_motifs(motifs, baseline, len(runs))
 
 
 @app.command()

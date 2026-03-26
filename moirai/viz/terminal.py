@@ -475,3 +475,46 @@ def print_diff(diff: CohortDiff, a_label: str, b_label: str) -> None:
         for sig, count in diff.b_only_signatures[:5]:
             compressed = _truncate_middle(_compress_prototype(sig), 60)
             console.print(f"  {compressed}  [dim]({count})[/dim]")
+
+
+def print_motifs(motifs: list, baseline: float, n_runs: int) -> None:
+    """Print discriminative motif patterns.
+
+    Args:
+        motifs: list of Motif objects from analyze/motifs.py
+        baseline: overall success rate
+        n_runs: total number of runs analyzed
+    """
+    if not motifs:
+        console.print("No significant patterns found.")
+        return
+
+    console.print(f"[bold]Discriminative patterns[/bold] ({n_runs} runs, {baseline:.0%} baseline success)\n")
+
+    # Split into positive (lift > 1) and negative (lift < 1)
+    positive = [m for m in motifs if m.lift > 1.05]
+    negative = [m for m in motifs if m.lift < 0.95]
+
+    if positive:
+        console.print("[green][bold]Patterns correlated with success:[/bold][/green]")
+        for m in positive[:10]:
+            p_str = f"p={m.p_value:.3f}" if m.p_value is not None else ""
+            pos_str = "early" if m.avg_position < 0.3 else ("late" if m.avg_position > 0.7 else "mid")
+            console.print(
+                f"  [green]{m.display}[/green]  "
+                f"{m.success_rate:.0%} success ({m.total_runs} runs) vs {baseline:.0%} baseline  "
+                f"[dim]{pos_str}, {p_str}[/dim]"
+            )
+        console.print()
+
+    if negative:
+        console.print("[red][bold]Patterns correlated with failure:[/bold][/red]")
+        for m in negative[:10]:
+            p_str = f"p={m.p_value:.3f}" if m.p_value is not None else ""
+            pos_str = "early" if m.avg_position < 0.3 else ("late" if m.avg_position > 0.7 else "mid")
+            console.print(
+                f"  [red]{m.display}[/red]  "
+                f"{m.success_rate:.0%} success ({m.total_runs} runs) vs {baseline:.0%} baseline  "
+                f"[dim]{pos_str}, {p_str}[/dim]"
+            )
+        console.print()
