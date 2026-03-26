@@ -68,18 +68,34 @@ def print_summary(summary: RunSummary, runs: list[Run] | None = None) -> None:
         console.print("Avg latency: N/A")
 
     if summary.top_signatures and runs:
-        # Build signature -> compressed mapping from actual runs
-        from moirai.schema import signature as sig_fn
-        sig_to_compressed: dict[str, str] = {}
-        for run in runs:
-            s = sig_fn(run)
-            if s not in sig_to_compressed:
-                sig_to_compressed[s] = compress_run(run)
+        # Check if step-level signatures are mostly unique
+        top_count = summary.top_signatures[0][1] if summary.top_signatures else 0
+        all_unique = top_count <= 1 and len(runs) > 5
 
-        console.print("\nTop patterns:")
-        for i, (sig, count) in enumerate(summary.top_signatures[:10], 1):
-            display = sig_to_compressed.get(sig, sig[:80])
-            console.print(f"  {i}. {display}  [dim]({count})[/dim]")
+        if all_unique:
+            # Step-level is too granular — show phase-level patterns instead
+            from collections import Counter
+            phase_counter: Counter[str] = Counter()
+            for run in runs:
+                phase_counter[compress_phases(run)] += 1
+            top_phases = phase_counter.most_common(10)
+
+            console.print("\nTop phase patterns:")
+            for i, (pattern, count) in enumerate(top_phases, 1):
+                display = pattern if len(pattern) <= 80 else pattern[:77] + "..."
+                console.print(f"  {i}. {display}  [dim]({count})[/dim]")
+        else:
+            from moirai.schema import signature as sig_fn
+            sig_to_compressed: dict[str, str] = {}
+            for run in runs:
+                s = sig_fn(run)
+                if s not in sig_to_compressed:
+                    sig_to_compressed[s] = compress_run(run)
+
+            console.print("\nTop patterns:")
+            for i, (sig, count) in enumerate(summary.top_signatures[:10], 1):
+                display = sig_to_compressed.get(sig, sig[:80])
+                console.print(f"  {i}. {display}  [dim]({count})[/dim]")
     elif summary.top_signatures:
         console.print("\nTop signatures:")
         for i, (sig, count) in enumerate(summary.top_signatures[:10], 1):
@@ -162,17 +178,38 @@ def print_trace(run: Run, expand: bool = False) -> None:
                 console.print(f"  [bold]Output:[/bold] {step.output}")
 
 
+def _truncate_middle(text: str, max_len: int) -> str:
+    """Truncate long text preserving beginning and ending."""
+    if len(text) <= max_len:
+        return text
+    # Show beginning and ending with ... in the middle
+    half = (max_len - 5) // 2
+    return text[:half] + " ... " + text[-half:]
+
+
 def _compress_prototype(proto: str) -> str:
-    """Compress a raw signature prototype for display."""
-    # Prototypes are in "type:name > type:name" format
-    # Extract just the names and compress
+    """Compress a raw signature prototype into a phase-level display.
+
+    Prototypes are in "type:name > type:name" format. We extract step names,
+    filter noise, classify into phases, and RLE the result.
+    """
+    from moirai.compress import NOISE_STEPS, PHASE_MAP, TYPE_PHASE_MAP, _rle, _format_rle
+
     parts = proto.split(" > ")
-    names = [p.split(":")[-1] if ":" in p else p for p in parts]
-    # RLE
-    if not names:
+    phases: list[str] = []
+    for p in parts:
+        if ":" in p:
+            step_type, name = p.split(":", 1)
+        else:
+            step_type, name = p, p
+        if name in NOISE_STEPS:
+            continue
+        phase = PHASE_MAP.get(name, TYPE_PHASE_MAP.get(step_type, "other"))
+        phases.append(phase)
+
+    if not phases:
         return "(empty)"
-    from moirai.compress import _rle, _format_rle
-    return _format_rle(_rle(names))
+    return _format_rle(_rle(phases))
 
 
 def print_clusters(result: ClusterResult, runs: list[Run] | None = None) -> None:
@@ -198,9 +235,7 @@ def print_clusters(result: ClusterResult, runs: list[Run] | None = None) -> None
                 sorted_by_len = sorted(cluster_runs_list, key=lambda r: len(r.steps))
                 representative = sorted_by_len[len(sorted_by_len) // 2]
                 phases = compress_phases(representative)
-                if len(phases) > 80:
-                    phases = phases[:77] + "..."
-                console.print(f"  [cyan]{phases}[/cyan]")
+                console.print(f"  [cyan]{_truncate_middle(phases, 80)}[/cyan]")
 
                 # Phase mix for the cluster
                 from collections import Counter
@@ -285,10 +320,9 @@ def _print_branch_context(
     alignment: object,
     run_map: dict[str, Run],
 ) -> None:
-    """Show context window around a divergence for one branch."""
+    """Show context window (5 steps before/after) around a divergence for one branch."""
     from moirai.schema import GAP
 
-    # Find runs that took this branch
     run_ids = alignment.run_ids  # type: ignore
     matrix = alignment.matrix  # type: ignore
     branch_rids: list[str] = []
@@ -301,12 +335,33 @@ def _print_branch_context(
     if not branch_rids or branch_rids[0] not in run_map:
         return
 
-    # Show compressed trajectory of first representative run
-    rep_run = run_map[branch_rids[0]]
-    compressed = compress_run(rep_run)
-    if len(compressed) > 60:
-        compressed = compressed[:57] + "..."
-    console.print(f"    [dim]e.g. {rep_run.run_id[:30]}... → {compressed}[/dim]")
+    # Get the aligned row for the representative run
+    rep_rid = branch_rids[0]
+    rep_idx = run_ids.index(rep_rid)
+    row = matrix[rep_idx]
+
+    # Extract context window: 5 before, the split, 5 after
+    col = point.column
+    start = max(0, col - 5)
+    end = min(len(row), col + 6)
+    window = row[start:end]
+
+    # Filter gaps and format with the split point marked
+    parts: list[str] = []
+    for i, val in enumerate(window):
+        if val == GAP:
+            continue
+        actual_col = start + i
+        if actual_col == col:
+            parts.append(f"\\[{val}]")  # escaped bracket so Rich doesn't parse as markup
+        else:
+            parts.append(val)
+
+    if parts:
+        context = " → ".join(parts)
+        if len(context) > 70:
+            context = context[:67] + "..."
+        console.print(f"    [dim]context: ...{context}...[/dim]")
 
 
 def _fmt_delta(a: float | None, b: float | None, fmt: str = ".1f", suffix: str = "") -> str:
@@ -342,9 +397,7 @@ def print_diff(diff: CohortDiff, a_label: str, b_label: str) -> None:
     if diff.cluster_shifts:
         console.print("\n[bold]Cluster shifts:[/bold]")
         for proto, delta in diff.cluster_shifts:
-            compressed = _compress_prototype(proto)
-            if len(compressed) > 50:
-                compressed = compressed[:47] + "..."
+            compressed = _truncate_middle(_compress_prototype(proto), 50)
             sign = "+" if delta > 0 else ""
             color = "green" if delta > 0 else "red"
             console.print(f"  {compressed}: [{color}]{sign}{delta} runs[/{color}]")
@@ -352,15 +405,11 @@ def print_diff(diff: CohortDiff, a_label: str, b_label: str) -> None:
     if diff.a_only_signatures:
         console.print(f"\n[bold]Patterns only in A:[/bold]")
         for sig, count in diff.a_only_signatures[:5]:
-            compressed = _compress_prototype(sig)
-            if len(compressed) > 60:
-                compressed = compressed[:57] + "..."
+            compressed = _truncate_middle(_compress_prototype(sig), 60)
             console.print(f"  {compressed}  [dim]({count})[/dim]")
 
     if diff.b_only_signatures:
         console.print(f"\n[bold]Patterns only in B:[/bold]")
         for sig, count in diff.b_only_signatures[:5]:
-            compressed = _compress_prototype(sig)
-            if len(compressed) > 60:
-                compressed = compressed[:57] + "..."
+            compressed = _truncate_middle(_compress_prototype(sig), 60)
             console.print(f"  {compressed}  [dim]({count})[/dim]")
