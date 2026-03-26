@@ -53,6 +53,7 @@ def write_branch_html(
     profiles_html = _build_cluster_profiles(cluster_result, runs)
     patterns_html = _build_patterns_table(runs)
     divergence_html = _build_divergence_cards(points, alignment, runs)
+    recs_html = _build_recommendations(runs, points)
 
     n_pass = sum(1 for r in runs if r.result.success)
     n_div = len(points)
@@ -79,6 +80,11 @@ def write_branch_html(
   .branch-stats {{ font-size: 12px; color: #888; }}
   .context {{ font-family: monospace; font-size: 12px; color: #666; margin-top: 4px; padding: 4px 8px; background: #f8f8f8; border-radius: 3px; }}
   .phase-context {{ font-size: 12px; color: #888; margin-bottom: 8px; }}
+  .rec {{ border-left: 4px solid #4e79a7; padding: 12px 16px; margin: 12px 0; background: #f8fafc; }}
+  .rec-action {{ font-size: 15px; font-weight: 600; color: #222; margin-bottom: 4px; }}
+  .rec-impact {{ font-size: 13px; color: #555; margin-bottom: 6px; }}
+  .rec-evidence {{ font-size: 12px; color: #888; }}
+  .rec-evidence code {{ background: #eef; padding: 1px 4px; border-radius: 2px; }}
 </style>
 </head>
 <body>
@@ -87,6 +93,12 @@ def write_branch_html(
   <div class="stat"><div class="stat-value">{len(runs)}</div><div class="stat-label">runs</div></div>
   <div class="stat"><div class="stat-value">{n_pass}/{len(runs)}</div><div class="stat-label">pass / total</div></div>
   <div class="stat"><div class="stat-value">{n_div}</div><div class="stat-label">divergence points</div></div>
+</div>
+
+<div class="panel">
+<h2>Recommendations</h2>
+<p>What to change based on this analysis, ranked by expected impact.</p>
+{recs_html}
 </div>
 
 <div class="panel">
@@ -305,7 +317,33 @@ def _get_context_str(col: int, value: str, alignment: Alignment) -> str:
     return ""
 
 
-# --- Clusters and Diff HTML (unchanged) ---
+def _build_recommendations(runs: list[Run], points: list[DivergencePoint]) -> str:
+    """Build recommendations section from analysis synthesis."""
+    from moirai.analyze.motifs import find_motifs
+    from moirai.analyze.recommend import synthesize
+
+    motifs = find_motifs(runs, min_n=3, max_n=5, min_count=3)
+    known = [r for r in runs if r.result.success is not None]
+    if not known:
+        return "<p>No outcome data for recommendations.</p>"
+    baseline = sum(1 for r in known if r.result.success) / len(known)
+
+    recs = synthesize(motifs, points, len(runs), baseline)
+    if not recs:
+        return "<p>Not enough data to generate recommendations.</p>"
+
+    html = ""
+    for i, rec in enumerate(recs, 1):
+        html += f'<div class="rec">'
+        html += f'<div class="rec-action">{i}. {rec.action}</div>'
+        html += f'<div class="rec-impact">{rec.impact}</div>'
+        html += f'<div class="rec-evidence">Evidence: {"; ".join(rec.evidence)}</div>'
+        html += f'</div>'
+
+    return html
+
+
+# --- Clusters and Diff HTML ---
 
 def write_clusters_html(result: ClusterResult, path: Path, runs: list[Run] | None = None) -> Path:
     """Write cluster visualization."""
