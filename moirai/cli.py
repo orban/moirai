@@ -148,7 +148,7 @@ def clusters(
 
     if html:
         from moirai.viz.html import write_clusters_html
-        out = write_clusters_html(result, html)
+        out = write_clusters_html(result, html, runs)
         console.print(f"\nHTML written to {out}")
 
 
