@@ -61,9 +61,9 @@ def write_branch_html(
         _write_empty(path, "No runs to display.")
         return path
 
-    sankey_html = _build_sankey(runs, points)
+    sankey_html = _build_sankey(runs)
     heatmap_html = _build_alignment_heatmap(alignment, points, runs)
-    timeline_html = _build_phase_timeline(runs, points)
+    timeline_html = _build_phase_timeline(runs)
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -117,22 +117,20 @@ def write_branch_html(
     return path
 
 
-def _build_phase_timeline(runs: list[Run], points: list[DivergencePoint]) -> str:
+def _build_phase_timeline(runs: list[Run]) -> str:
     """Build a phase timeline: horizontal bars colored by phase, sorted by outcome."""
-    # Sort: pass first, then by length
-    sorted_runs = sorted(runs, key=lambda r: (not r.result.success, len(r.steps)))
+    from moirai.compress import step_phase
 
-    max_steps = max(len(r.steps) for r in sorted_runs) if sorted_runs else 1
+    sorted_runs = sorted(runs, key=lambda r: (not r.result.success, len(r.steps)))
 
     fig = go.Figure()
 
-    for row_idx, run in enumerate(sorted_runs):
+    for run in sorted_runs:
         phases: list[tuple[str, int, int]] = []  # (phase, start, end)
         filtered_idx = 0
         for step in run.steps:
             if step.name in NOISE_STEPS:
                 continue
-            from moirai.compress import step_phase
             phase = step_phase(step)
             if phases and phases[-1][0] == phase:
                 phases[-1] = (phase, phases[-1][1], filtered_idx + 1)
@@ -156,12 +154,8 @@ def _build_phase_timeline(runs: list[Run], points: list[DivergencePoint]) -> str
                 hovertemplate=f"{phase} (steps {start}-{end})<br>{short_id}<extra></extra>",
             ))
 
-    # Add divergence point markers
-    for point in points:
-        fig.add_vline(
-            x=point.column, line_dash="dash", line_color="red", opacity=0.5,
-            annotation_text=f"p={point.p_value:.2f}" if point.p_value else "",
-        )
+    # Divergence points live on the alignment coordinate system, not the per-run
+    # step position system. Don't plot them here — they're shown on the heatmap.
 
     fig.update_layout(
         barmode="stack",
@@ -183,7 +177,7 @@ def _build_phase_timeline(runs: list[Run], points: list[DivergencePoint]) -> str
     return legend_html + fig.to_html(include_plotlyjs=True, full_html=False)
 
 
-def _build_sankey(runs: list[Run], points: list[DivergencePoint]) -> str:
+def _build_sankey(runs: list[Run]) -> str:
     """Build a Sankey diagram of step transitions."""
     # Count transitions between consecutive filtered steps
     transitions: dict[tuple[str, str], tuple[int, int]] = {}  # (from, to) -> (total, successes)
