@@ -28,20 +28,6 @@ PHASE_COLORS = {
     "other": "#76b7b2",
 }
 
-STEP_COLORS = {
-    "read": "#4e79a7",
-    "search": "#76b7b2",
-    "edit": "#f28e2b",
-    "write": "#edc948",
-    "test_result": "#59a14f",
-    "test": "#59a14f",
-    "bash": "#e15759",
-    "reason": "#b07aa1",
-    "subagent": "#ff9da7",
-    "plan": "#9c755f",
-    "result": "#bab0ac",
-}
-
 
 def write_branch_html(
     alignment: Alignment,
@@ -61,7 +47,7 @@ def write_branch_html(
         _write_empty(path, "No runs to display.")
         return path
 
-    sankey_html = _build_sankey(runs)
+    patterns_html = _build_patterns_table(runs)
     heatmap_html = _build_alignment_heatmap(alignment, points, runs)
     timeline_html = _build_phase_timeline(runs)
 
@@ -99,9 +85,9 @@ def write_branch_html(
 </div>
 
 <div class="panel">
-<h2>Step Flow</h2>
-<p>How runs transition between steps. Width = frequency, color = success rate of runs taking that path.</p>
-{sankey_html}
+<h2>Discriminative Patterns</h2>
+<p>Step sequences that predict success or failure. Sorted by how much they deviate from baseline.</p>
+{patterns_html}
 </div>
 
 <div class="panel">
@@ -177,70 +163,56 @@ def _build_phase_timeline(runs: list[Run]) -> str:
     return legend_html + fig.to_html(include_plotlyjs=True, full_html=False)
 
 
-def _build_sankey(runs: list[Run]) -> str:
-    """Build a Sankey diagram of step transitions."""
-    # Count transitions between consecutive filtered steps
-    transitions: dict[tuple[str, str], tuple[int, int]] = {}  # (from, to) -> (total, successes)
+def _build_patterns_table(runs: list[Run]) -> str:
+    """Build an HTML table of discriminative step patterns."""
+    from moirai.analyze.motifs import find_motifs
 
-    for run in runs:
-        filtered = [s.name for s in run.steps if s.name not in NOISE_STEPS]
-        success = run.result.success is True
+    motifs = find_motifs(runs, min_n=3, max_n=5, min_count=3)
 
-        for i in range(len(filtered) - 1):
-            key = (filtered[i], filtered[i + 1])
-            t, s = transitions.get(key, (0, 0))
-            transitions[key] = (t + 1, s + (1 if success else 0))
+    known = [r for r in runs if r.result.success is not None]
+    if not known:
+        return "<p>No outcome data for pattern analysis.</p>"
+    baseline = sum(1 for r in known if r.result.success) / len(known)
 
-    if not transitions:
-        return "<p>No transitions to display.</p>"
+    positive = [m for m in motifs if m.lift > 1.05][:8]
+    negative = [m for m in motifs if m.lift < 0.95][:8]
 
-    # Build node list
-    all_steps = set()
-    for (a, b) in transitions:
-        all_steps.add(a)
-        all_steps.add(b)
-    node_list = sorted(all_steps)
-    node_idx = {name: i for i, name in enumerate(node_list)}
+    if not positive and not negative:
+        return f"<p>No significant patterns found (baseline: {baseline:.0%} success).</p>"
 
-    # Build links
-    sources = []
-    targets = []
-    values = []
-    colors = []
-    hover = []
+    html = f'<p style="color:#888">Baseline success rate: {baseline:.0%} across {len(known)} runs</p>'
+    html += '<table style="width:100%; border-collapse:collapse; font-size:14px">'
+    html += '<tr style="border-bottom:2px solid #ddd"><th style="text-align:left;padding:8px">Pattern</th>'
+    html += '<th style="text-align:right;padding:8px">Success</th>'
+    html += '<th style="text-align:right;padding:8px">Runs</th>'
+    html += '<th style="text-align:right;padding:8px">p-value</th>'
+    html += '<th style="text-align:left;padding:8px">Position</th></tr>'
 
-    for (src, tgt), (total, successes) in sorted(transitions.items(), key=lambda x: -x[1][0]):
-        if total < 2:
-            continue  # skip rare transitions
-        rate = successes / total if total > 0 else 0
-        sources.append(node_idx[src])
-        targets.append(node_idx[tgt])
-        values.append(total)
+    for m in positive:
+        pos = "early" if m.avg_position < 0.3 else ("late" if m.avg_position > 0.7 else "mid")
+        p_str = f"{m.p_value:.3f}" if m.p_value is not None else ""
+        html += f'<tr style="border-bottom:1px solid #eee;background:#f0faf0">'
+        html += f'<td style="padding:8px;font-family:monospace">{m.display}</td>'
+        html += f'<td style="text-align:right;padding:8px;color:#2d7d2d;font-weight:bold">{m.success_rate:.0%}</td>'
+        html += f'<td style="text-align:right;padding:8px">{m.total_runs}</td>'
+        html += f'<td style="text-align:right;padding:8px;color:#888">{p_str}</td>'
+        html += f'<td style="padding:8px;color:#888">{pos}</td></tr>'
 
-        # Color: green for high success, red for low
-        r = int(255 * (1 - rate))
-        g = int(255 * rate)
-        colors.append(f"rgba({r},{g},100,0.4)")
-        hover.append(f"{src} → {tgt}: {total} runs, {rate:.0%} success")
+    if positive and negative:
+        html += '<tr><td colspan="5" style="padding:4px"></td></tr>'
 
-    node_colors = [STEP_COLORS.get(name, "#bab0ac") for name in node_list]
+    for m in negative:
+        pos = "early" if m.avg_position < 0.3 else ("late" if m.avg_position > 0.7 else "mid")
+        p_str = f"{m.p_value:.3f}" if m.p_value is not None else ""
+        html += f'<tr style="border-bottom:1px solid #eee;background:#faf0f0">'
+        html += f'<td style="padding:8px;font-family:monospace">{m.display}</td>'
+        html += f'<td style="text-align:right;padding:8px;color:#c0392b;font-weight:bold">{m.success_rate:.0%}</td>'
+        html += f'<td style="text-align:right;padding:8px">{m.total_runs}</td>'
+        html += f'<td style="text-align:right;padding:8px;color:#888">{p_str}</td>'
+        html += f'<td style="padding:8px;color:#888">{pos}</td></tr>'
 
-    fig = go.Figure(data=[go.Sankey(
-        node=dict(
-            pad=15, thickness=20,
-            label=node_list,
-            color=node_colors,
-        ),
-        link=dict(
-            source=sources, target=targets, value=values,
-            color=colors,
-            hovertemplate="%{customdata}<extra></extra>",
-            customdata=hover,
-        ),
-    )])
-
-    fig.update_layout(height=400, margin=dict(l=20, r=20, t=20, b=20))
-    return fig.to_html(include_plotlyjs=False, full_html=False)
+    html += '</table>'
+    return html
 
 
 def _build_alignment_heatmap(
