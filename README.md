@@ -5,12 +5,14 @@ Trajectory-level debugging for stochastic agent systems.
 Align rollouts, identify divergence points, and surface behavioral branches that predict success or failure.
 
 ```
-                 ┌─ test → plan → edit ────── success (74%)
-run 1─┐          │
-run 2─┼─ read → test → test ─┤
-run 3─┤          │            └─ search → search ──── failure (0%)
-run 4─┘          │
-                 divergence point (p=0.075)
+                       ┌─ read(config) → read(test_file) ─── success (100%)
+                       │
+run 1─┐                │
+run 2─┼─ read(source) ─┤
+run 3─┤                │
+run 4─┘                └─ bash(python) → bash(python) ───── failure (0%)
+                       │
+                       divergence point (p=0.001)
 ```
 
 ## The core idea
@@ -19,21 +21,88 @@ Stochastic agents don't fail randomly. When you run the same agent 100 times on 
 
 moirai treats agent runs as sequences of steps (tool calls, reasoning turns, test executions), aligns them using Needleman-Wunsch (the same algorithm used for DNA sequence alignment), and statistically tests each aligned position for outcome-predictive divergence.
 
-Across 1000 SWE-bench agent traces, this surfaces findings like:
+## Example: 165 eval-harness runs (19% baseline success)
+
+### Where trajectories split
 
 ```
-$ moirai branch runs/
+$ moirai branch runs/ --harness none
 
-Cluster 13: 109 runs, 74% success
-  Position 35 (p=0.075)
-  verify→
-    test_result: 77 runs, 74% success     ← agents that keep testing pass
-    search:       2 runs,  0% success     ← agents that go back to searching always fail
+Cluster 4: 47 runs, 19% success
+  Aligned to 110 columns, 1 significant divergence point
+
+  Position 55 (p=0.100)
+    bash(python):  3 runs, 0% success
+    context: ...read(source) → read(source) → read(source) → [bash(python)] → bash...
+    read(config):  2 runs, 100% success
+    context: ...read(config) → read(test_file) → [read(config)]...
 ```
+
+After reading source files, agents that run python scripts (executing code without testing the fix) always fail. Agents that go back to the config and test files always succeed. Same cluster, same task distribution, same starting conditions — the outcome is determined by what the agent does at this fork.
+
+### Patterns that predict success and failure
+
+```
+$ moirai patterns runs/ --harness none
+
+Patterns that predict success (baseline: 19%):
+  read(source) → subagent → search(glob) → search(glob)   100% (6 runs)  p=0.000
+  search(glob) → read(source) → subagent → search(glob)   100% (4 runs)  p=0.001
+  read(config) → read(other) → read(test_file)            100% (5 runs)  p=0.000
+
+Patterns that predict failure:
+  read(source) → edit(source) → bash(python)                 0% (11 runs)  p=0.128
+  read(source) → read(source) → read(source) → bash(other)  0% (15 runs)  p=0.076
+  bash(python) → test → bash(python)                         0% (16 runs)  p=0.044
+  bash(python) → bash(python) → bash(python)×5               0% (13 runs)  p=0.131
+```
+
+The success patterns: read source, delegate to a subagent, do broad then targeted search. The agent that understands the structure before editing succeeds. The failure patterns: edit source then run python (testing the code instead of running the test suite), or looping on bash commands without progress. The stuck agent runs python over and over — 0% success rate across 16 runs.
+
+### What agents actually did
+
+```
+$ moirai clusters runs/ --harness none
+
+Cluster 4: 47 runs, 19% success
+  48% explore, 27% execute, 12% verify, 7% modify
+    normal (40 runs, 18%): read(config) → search(glob)×2 → read(source) → subagent →...
+    retry loop (7 runs, 29%): read(config) → search(glob)×2 → read(source) → subagent →...
+
+Cluster 3: 35 runs, 17% success
+  60% explore, 12% modify, 9% execute, 9% verify
+    normal (30 runs, 20%): search(glob) → search(specific) → read(source) → edit(source)...
+    retry loop (5 runs, 0%): read(config) → search(glob)×2 → read(source) → search(glob)...
+```
+
+### Explain any specific run
+
+```
+$ moirai explain runs/ --run ansible_ansible-85488
+
+Run: ansible_ansible-85488... PASS
+Cluster: 3 (118 runs, 11% success)
+
+Trajectory: read(config)×2 → search(specific)×2 → read(source)×2 →
+            search(specific) → read(source) → search(glob) → search(specific) →
+            read(other) → read(config) → edit(source)×3 → read(source) → test → result
+Mix: 76% explore, 14% modify, 5% verify
+
+Compared to failing runs in this cluster (105):
+  avg 20 steps (vs 21 in this run)
+```
+
+This run spent 76% of its steps exploring (reading, searching) before making 3 targeted edits. The 105 failing runs in the same cluster averaged the same length — the difference wasn't effort, it was strategy.
+
+### HTML dashboard
+
+`moirai branch --html report.html` generates an analysis dashboard:
+
+![moirai dashboard](docs/images/dashboard.png)
 
 ## Why existing tools miss this
 
-**Aggregate metrics** (pass rate, avg tokens, cost) tell you *that* 30% of runs fail but not *whether* they fail the same way or five different ways. A harness change that improves pass rate by 10% might have fixed one failure mode and introduced another. You can't see this from the numbers.
+**Aggregate metrics** (pass rate, avg tokens, cost) tell you *that* 19% of runs pass but not *whether* they fail the same way or five different ways. A harness change that improves pass rate might fix one failure mode and introduce another. You can't see this from the numbers.
 
 **Raw traces and trace viewers** show you what happened in one run. But if you're running 100 agents on the same task, reading individual traces doesn't scale. You need population-level analysis — what do the successful runs have in common that the failures don't?
 
@@ -47,85 +116,10 @@ moirai operates at the layer between individual traces and aggregate metrics: st
 Trajectory alignment identifies *where* in a rollout interpretability is most useful. Instead of reasoning about every token across a 50-step trajectory, you can focus on the 2-3 aligned positions where the agent's choice statistically predicts success or failure. These divergence points are where the model's decision-making actually matters — and where mechanistic analysis has the highest leverage.
 
 ### For agent monitoring
-Recurring failure branches are more useful than raw anomaly detection on individual traces. If 45% of your failing runs share the same structural pattern (`test → bash → bash`, 5% success rate), that's a detector you can build and deploy — not a one-off incident to investigate. moirai gives you the recurring behavioral signatures, not just the individual alerts.
+Recurring failure branches are more useful than raw anomaly detection on individual traces. If your failing runs share the structural pattern `read(source) → edit(source) → bash(python)` at 0% success, that's a detector you can build and deploy — not a one-off incident to investigate. moirai gives you the recurring behavioral signatures, not just the individual alerts.
 
 ### For simulation and environment design
-Divergence points reveal which environment choices or early decisions dominate downstream outcomes. If agents that get a specific observation at step 16 succeed 67% of the time while those that don't succeed 0%, that's a signal about environment design — not agent capability. Trajectory alignment separates "the agent made a bad choice" from "the environment presented a hard fork."
-
-## Walkthrough: 1000 SWE-bench agent traces
-
-### Runs cluster into behavioral modes
-
-```
-$ moirai clusters runs/
-
-Cluster 18: 149 runs, 85% success
-  explore → verify(fail) → modify → verify(fail)×2
-  normal (143 runs, 85%): read → test(fail) → write → edit → test(fail) → write...
-
-Cluster 8:  83 runs, 49% success
-  explore → verify(fail)×2 → explore → verify(fail)×4
-  normal (83 runs, 49%): read → test(fail)×2 → search → test(fail)×3 → write...
-```
-
-1000 runs aren't 1000 unique strategies. They're variations on ~10 behavioral patterns with different success rates. Cluster 18 (explore, then modify) succeeds 85%. Cluster 8 (explore, then explore more) succeeds 49%.
-
-### Within clusters, divergence points split outcomes
-
-```
-$ moirai branch runs/
-
-Cluster 13: 109 runs, 74% success
-  Aligned to 55 columns, 1 significant divergence point
-
-  Position 35 (p=0.075)
-  verify→
-    test_result: 77 runs, 74% success
-    context: ...test_result → write → [test_result] → test_result...
-    search: 2 runs, 0% success
-    context: ...test_result → [search] → search → test_result...
-```
-
-At position 35, agents are in a verification phase. 77 runs continue testing — 74% of them succeed. 2 runs go back to searching — both fail. Abandoning a verification strategy to restart exploration at this point is a death sentence.
-
-### Pattern mining finds recurring failure signatures
-
-```
-$ moirai patterns runs/
-
-Patterns that predict success:
-  write → edit → reason                              100% success (13 runs)  p=0.047
-  edit → test_result → write → test_result → reason  100% success (12 runs)  p=0.044
-
-Patterns that predict failure:
-  write → test_result → read → read → test_result      0% success (4 runs)  p=0.004
-  read → read → read → test_result                    17% success (6 runs)  p=0.005
-```
-
-Success patterns contain `reason` — the agent pauses to think between actions. Failure patterns are loops: `read → read → read` (exploring without acting) or repeated oscillation without convergence.
-
-### Explain any specific run
-
-```
-$ moirai explain runs/ --run Project-MONAI
-
-Run: Project-MONAI__MONAI... FAIL
-Cluster: 23 (5 runs, 40% success)
-
-Trajectory: read → search → test(fail)×2 → reason → test(fail) → write →
-            reason → edit → test(fail)×2 → write → test(fail) → test(pass) → reason
-Mix: 47% verify, 20% think, 20% modify, 13% explore
-
-Compared to passing runs in this cluster:
-  avg 30 steps (vs 29 in this run)
-  e.g. read → search → test(fail) → write → test(fail) → reason → write → ...
-```
-
-### HTML dashboard
-
-`moirai branch --html report.html` generates an analysis dashboard:
-
-![moirai dashboard](docs/images/dashboard.png)
+Divergence points reveal which environment choices or early decisions dominate downstream outcomes. If agents that read the test file at step 16 succeed 100% while those that run bash(python) succeed 0%, that's a signal about environment design — not just agent capability. Trajectory alignment separates "the agent made a bad choice" from "the environment presented a hard fork."
 
 ## What this is not
 
@@ -161,23 +155,23 @@ All directory commands support `--model`, `--harness`, `--task-family` filters.
 
 ## How it works
 
-1. **Normalize** — loads JSON trace files, maps step type aliases, filters noise
+1. **Normalize** — loads JSON trace files, enriches step labels from attrs (file type, command type, search specificity)
 2. **Cluster** — pairwise Needleman-Wunsch edit distance over step sequences, agglomerative clustering
-3. **Align** — progressive multi-sequence alignment within each cluster at step-name level
+3. **Align** — progressive multi-sequence alignment within each cluster at enriched-name level
 4. **Test** — Fisher's exact test at each aligned position; filters by significance (p<0.2) and stability (min 2 runs per branch)
 5. **Mine** — extracts 3-5 step n-grams, tests which patterns discriminate between success and failure
 
 ## Data format
 
-Each JSON file is one run. Step types: `llm`, `tool`, `system`, `memory`, `compaction`, `judge`, `error`, `handoff`. Converters included for [SWE-smith](scripts/convert_swe_smith.py) and [eval-harness](scripts/convert_eval_harness.py) formats.
+Each JSON file is one run. Step types: `llm`, `tool`, `system`, `memory`, `compaction`, `judge`, `error`, `handoff`. Steps with `attrs` (file paths, commands, search patterns) get enriched labels automatically. Converters included for [SWE-smith](scripts/convert_swe_smith.py) and [eval-harness](scripts/convert_eval_harness.py) formats.
 
 ## Limitations
 
-moirai works on tool-call sequences — what the agent *did*, not what it *thought*. The patterns it finds are structural correlations, not causal explanations. "Runs that loop on bash fail" might mean "stuck agents thrash with bash," not "bash causes failure." Richer traces (with reasoning content, error messages, file context) would enable deeper analysis.
+moirai works on behavioral sequences — what the agent *did*, not what it *thought*. The patterns it finds are structural correlations, not causal explanations. "Runs that loop on bash(python) fail" might mean "stuck agents thrash with python scripts," not "python scripts cause failure." Richer traces (with reasoning content, error messages, and file context) would enable deeper analysis. The enriched labels from attrs help but don't close this gap entirely.
 
 ## Roadmap
 
 - Content-aware analysis (what the agent read/wrote, not just which tool it called)
-- Semantic step grouping beyond tool names
+- Semantic step grouping beyond tool names and file extensions
 - Time-series drift detection across nightly runs
 - OpenTelemetry adapters
