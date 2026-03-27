@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from moirai.compress import compress_phases, NOISE_STEPS
+from moirai.compress import compress_phases, step_enriched_name
 from moirai.schema import (
     Alignment,
     ClusterResult,
@@ -15,17 +14,23 @@ from moirai.schema import (
     Run,
 )
 
-PHASE_COLORS = {
-    "explore": "#4e79a7",
-    "modify": "#f28e2b",
-    "verify": "#59a14f",
-    "execute": "#e15759",
-    "think": "#b07aa1",
-    "system": "#9c755f",
-    "error": "#ff4136",
-    "act": "#bab0ac",
-    "other": "#76b7b2",
+# Colors for enriched step names
+STEP_COLORS: dict[str, str] = {
+    "read(source)": "#4e79a7", "read(config)": "#7eb0d5", "read(test_file)": "#3a6b96",
+    "read(other)": "#a0c4e0", "read": "#4e79a7",
+    "search(glob)": "#76b7b2", "search(specific)": "#4a9a95", "search": "#76b7b2",
+    "edit(source)": "#f28e2b", "edit(config)": "#d4a56a", "edit": "#f28e2b",
+    "write(source)": "#edc948", "write(config)": "#d4b84a", "write(other)": "#c9b96a",
+    "write(test_file)": "#b8a840", "write": "#edc948",
+    "test": "#59a14f", "test(pass)": "#2d7d2d", "test(fail)": "#b5cf6b",
+    "bash(python)": "#e15759", "bash(explore)": "#ff9da7", "bash(setup)": "#d4a5a7",
+    "bash(read)": "#c9827a", "bash(other)": "#d48a8c", "bash": "#e15759",
+    "reason": "#b07aa1", "subagent": "#9c5e8a", "plan": "#9c755f",
+    "result": "#bab0ac", "task": "#888888", "taskoutput": "#999999",
+    GAP: "#2a2a2e",
 }
+
+DEFAULT_COLOR = "#bab0ac"
 
 
 def write_branch_html(
@@ -34,90 +39,88 @@ def write_branch_html(
     runs: list[Run],
     path: Path,
 ) -> Path:
-    """Write insight-driven branch analysis dashboard.
-
-    Panel 1: Cluster profiles — one bar per behavioral mode
-    Panel 2: Discriminative patterns — step sequences that predict outcome
-    Panel 3: Divergence cards — key decision points with branches and success rates
-    """
+    """Write branch analysis dashboard with trajectory matrix and divergence tree."""
     path = Path(path)
 
     if not runs:
         _write_empty(path, "No runs to display.")
         return path
 
-    # Cluster for the profiles panel
     from moirai.analyze.cluster import cluster_runs
     cluster_result = cluster_runs(runs, level="type", threshold=0.3)
 
-    profiles_html = _build_cluster_profiles(cluster_result, runs)
+    matrix_html = _build_trajectory_matrix(alignment, points, runs, cluster_result)
+    tree_html = _build_divergence_tree(points, alignment, runs)
     patterns_html = _build_patterns_table(runs)
-    divergence_html = _build_divergence_cards(points, alignment, runs)
-    recs_html = _build_recommendations(runs, points)
 
     n_pass = sum(1 for r in runs if r.result.success)
-    n_div = len(points)
+
+    # Build legend from actual step names present
+    all_names: set[str] = set()
+    for run in runs:
+        for s in run.steps:
+            n = step_enriched_name(s)
+            if n:
+                all_names.add(n)
+    legend_items = []
+    for name in sorted(all_names):
+        color = STEP_COLORS.get(name, DEFAULT_COLOR)
+        legend_items.append(f'<span style="display:inline-flex;align-items:center;gap:3px;margin-right:12px">'
+                           f'<span style="width:10px;height:10px;background:{color};border-radius:2px;display:inline-block"></span>'
+                           f'<span style="font-size:11px">{name}</span></span>')
+    legend_html = '<div style="line-height:2">' + ''.join(legend_items) + '</div>'
 
     html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>moirai — branch analysis</title>
+<title>moirai</title>
 <style>
-  body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 20px; background: #fafafa; color: #333; }}
-  h1 {{ color: #222; margin-bottom: 5px; }}
-  h2 {{ color: #444; margin-top: 0; }}
-  .panel {{ background: white; border-radius: 8px; padding: 24px; margin: 20px 0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-  .stats {{ display: flex; gap: 40px; margin: 15px 0 25px 0; }}
-  .stat {{ text-align: center; }}
-  .stat-value {{ font-size: 28px; font-weight: bold; color: #222; }}
-  .stat-label {{ font-size: 12px; color: #999; text-transform: uppercase; letter-spacing: 0.5px; }}
-  .card {{ border: 1px solid #e0e0e0; border-radius: 6px; padding: 16px; margin: 12px 0; }}
-  .card-header {{ font-weight: 600; margin-bottom: 8px; }}
-  .branch {{ display: flex; align-items: center; gap: 12px; padding: 6px 0; }}
-  .branch-bar {{ height: 24px; border-radius: 3px; min-width: 4px; }}
-  .branch-label {{ font-size: 13px; min-width: 100px; }}
-  .branch-stats {{ font-size: 12px; color: #888; }}
-  .context {{ font-family: monospace; font-size: 12px; color: #666; margin-top: 4px; padding: 4px 8px; background: #f8f8f8; border-radius: 3px; }}
-  .phase-context {{ font-size: 12px; color: #888; margin-bottom: 8px; }}
-  .rec {{ border-left: 4px solid #4e79a7; padding: 12px 16px; margin: 12px 0; background: #f8fafc; }}
-  .rec-action {{ font-size: 15px; font-weight: 600; color: #222; margin-bottom: 4px; }}
-  .rec-impact {{ font-size: 13px; color: #555; margin-bottom: 6px; }}
-  .rec-evidence {{ font-size: 12px; color: #888; }}
-  .rec-evidence code {{ background: #eef; padding: 1px 4px; border-radius: 2px; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 20px; background: #f7f7f8; color: #1a1a1a; }}
+  h1 {{ font-size: 22px; margin-bottom: 2px; }}
+  h2 {{ font-size: 16px; color: #333; margin-top: 0; margin-bottom: 12px; }}
+  .subtitle {{ color: #888; font-size: 13px; margin-bottom: 16px; }}
+  .stats {{ display: flex; gap: 32px; margin: 12px 0 20px 0; }}
+  .stat-value {{ font-size: 24px; font-weight: 700; }}
+  .stat-label {{ font-size: 11px; color: #999; text-transform: uppercase; letter-spacing: 0.5px; }}
+  .panel {{ background: white; border-radius: 6px; padding: 20px; margin: 16px 0; border: 1px solid #e5e5e5; }}
+  .legend {{ margin-bottom: 12px; }}
+  .tree-node {{ border: 1px solid #ddd; border-radius: 6px; padding: 10px 14px; margin: 6px 0; display: inline-block; }}
+  .tree-branch {{ margin-left: 24px; border-left: 2px solid #ddd; padding-left: 16px; }}
+  .tree-label {{ font-family: 'SF Mono', Menlo, monospace; font-size: 13px; font-weight: 600; }}
+  .tree-stats {{ font-size: 12px; color: #666; }}
+  .tree-context {{ font-family: 'SF Mono', Menlo, monospace; font-size: 11px; color: #999; margin-top: 2px; }}
+  .success {{ color: #2d7d2d; }}
+  .failure {{ color: #c0392b; }}
+  .mixed {{ color: #b07800; }}
 </style>
 </head>
 <body>
 <h1>moirai</h1>
-<p style="color:#666;margin-top:0">Trajectory divergence analysis</p>
+<div class="subtitle">Trajectory divergence analysis</div>
 <div class="stats">
-  <div class="stat"><div class="stat-value">{len(runs)}</div><div class="stat-label">runs</div></div>
-  <div class="stat"><div class="stat-value">{n_pass}/{len(runs)}</div><div class="stat-label">pass / total</div></div>
-  <div class="stat"><div class="stat-value">{n_div}</div><div class="stat-label">divergence points</div></div>
+  <div><div class="stat-value">{len(runs)}</div><div class="stat-label">runs</div></div>
+  <div><div class="stat-value">{n_pass}/{len(runs)}</div><div class="stat-label">pass / total</div></div>
+  <div><div class="stat-value">{len(points)}</div><div class="stat-label">divergence points</div></div>
 </div>
 
 <div class="panel">
-<h2>What to change</h2>
-<p>Findings ranked by expected impact on success rate.</p>
-{recs_html}
-</div>
-
-<div class="panel">
-<h2>How agents behave</h2>
-<p>Runs clustered by trajectory structure. Width = count, color = success rate (green = high, red = low).</p>
-{profiles_html}
-</div>
-
-<div class="panel">
-<h2>Patterns that predict failure</h2>
-<p>Step sequences significantly correlated with success or failure.</p>
-{patterns_html}
+<h2>Trajectory alignment</h2>
+<p style="font-size:13px;color:#666;margin-top:0">Every run as a row, aligned by sequence structure. Sorted by cluster, then outcome. Columns with red markers are statistically significant divergence points.</p>
+<div class="legend">{legend_html}</div>
+{matrix_html}
 </div>
 
 <div class="panel">
 <h2>Where trajectories diverge</h2>
-<p>Aligned positions where the agent's next step statistically predicts success or failure.</p>
-{divergence_html}
+<p style="font-size:13px;color:#666;margin-top:0">At each divergence point, which choice did agents make and what happened?</p>
+{tree_html}
+</div>
+
+<div class="panel">
+<h2>Patterns that predict failure</h2>
+<p style="font-size:13px;color:#666;margin-top:0">Step sequences significantly correlated with success or failure.</p>
+{patterns_html}
 </div>
 
 </body>
@@ -127,166 +130,153 @@ def write_branch_html(
     return path
 
 
-def _build_cluster_profiles(cluster_result: ClusterResult, runs: list[Run]) -> str:
-    """Build cluster profile bars — one per behavioral mode."""
-    from moirai.compress import step_phase, compress_run
+def _build_trajectory_matrix(
+    alignment: Alignment,
+    points: list[DivergencePoint],
+    runs: list[Run],
+    cluster_result: ClusterResult,
+) -> str:
+    """Build an SVG trajectory alignment matrix.
 
-    if not cluster_result.clusters:
-        return "<p>No clusters found.</p>"
+    Each row = one run. Each column = one aligned position.
+    Cells colored by enriched step name. Sorted by cluster, then pass/fail.
+    Divergence columns get a red marker on top.
+    """
+    if not alignment.matrix or not alignment.matrix[0]:
+        return "<p>No alignment data.</p>"
 
-    run_map = {r.run_id: r for r in runs}
-    sorted_clusters = sorted(cluster_result.clusters, key=lambda c: -c.count)
+    success_map = {r.run_id: r.result.success for r in runs}
+    div_cols = {p.column for p in points}
+    n_runs = len(alignment.run_ids)
+    n_cols = len(alignment.matrix[0])
 
-    # Build a horizontal bar chart: each bar is a cluster
-    labels = []
-    widths = []
-    colors = []
-    hover_texts = []
-
-    for info in sorted_clusters:
-        rate = info.success_rate or 0
-        members = [run_map[rid] for rid, cid in cluster_result.labels.items()
-                    if cid == info.cluster_id and rid in run_map]
-
-        # Representative compressed trajectory
-        if members:
-            rep = sorted(members, key=lambda r: len(r.steps))[len(members) // 2]
-            compressed = compress_run(rep)
-            if len(compressed) > 60:
-                compressed = compressed[:57] + "..."
-            phases = compress_phases(rep)
-            if len(phases) > 60:
-                phases = phases[:57] + "..."
-        else:
-            compressed = ""
-            phases = ""
-
-        labels.append(f"{info.count} runs, {rate:.0%} success")
-        widths.append(info.count)
-        # Color by success rate: green for high, red for low
-        r_val = int(200 * (1 - rate)) + 55
-        g_val = int(200 * rate) + 55
-        colors.append(f"rgb({r_val},{g_val},100)")
-        hover_texts.append(f"{compressed}<br>{phases}<br>{info.count} runs, {rate:.0%} success")
-
-    fig = go.Figure(go.Bar(
-        y=labels,
-        x=widths,
-        orientation="h",
-        marker_color=colors,
-        hovertext=hover_texts,
-        hovertemplate="%{hovertext}<extra></extra>",
+    # Sort runs: by cluster, then pass first, then by gap count
+    indices = list(range(n_runs))
+    indices.sort(key=lambda i: (
+        cluster_result.labels.get(alignment.run_ids[i], 999),
+        not (success_map.get(alignment.run_ids[i]) is True),
+        sum(1 for v in alignment.matrix[i] if v == GAP),
     ))
 
-    fig.update_layout(
-        height=max(200, len(sorted_clusters) * 45 + 80),
-        xaxis_title="Number of runs",
-        margin=dict(l=200, r=20, t=10, b=40),
-        showlegend=False,
-    )
+    cell_w = max(6, min(14, 900 // n_cols))
+    cell_h = max(4, min(12, 600 // n_runs))
+    label_w = 180
+    marker_h = 12
+    svg_w = label_w + n_cols * cell_w + 20
+    svg_h = marker_h + n_runs * cell_h + 10
 
-    return fig.to_html(include_plotlyjs=True, full_html=False)
+    parts = [f'<svg width="{svg_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg" style="font-family:SF Mono,Menlo,monospace;font-size:9px">']
 
+    # Divergence markers on top
+    for col in range(n_cols):
+        if col in div_cols:
+            x = label_w + col * cell_w
+            parts.append(f'<rect x="{x}" y="0" width="{cell_w}" height="{marker_h}" fill="#e15759" opacity="0.7"/>')
+            parts.append(f'<text x="{x + cell_w//2}" y="{marker_h - 2}" text-anchor="middle" fill="white" font-size="7">*</text>')
 
-def _build_patterns_table(runs: list[Run]) -> str:
-    """Build an HTML table of discriminative step patterns."""
-    from moirai.analyze.motifs import find_motifs
+    # Rows
+    for row_idx, orig_idx in enumerate(indices):
+        rid = alignment.run_ids[orig_idx]
+        y = marker_h + row_idx * cell_h
+        s = success_map.get(rid)
+        tag = "P" if s is True else ("F" if s is False else "?")
+        tag_color = "#2d7d2d" if s else "#c0392b"
 
-    motifs = find_motifs(runs, min_n=3, max_n=5, min_count=3)
+        # Label
+        short_id = rid[:22] + ".." if len(rid) > 24 else rid
+        parts.append(f'<text x="{label_w - 4}" y="{y + cell_h - 1}" text-anchor="end" fill="#666" font-size="8">{short_id}</text>')
+        parts.append(f'<text x="{label_w - 2}" y="{y + cell_h - 1}" text-anchor="end" fill="{tag_color}" font-size="8" font-weight="bold"> {tag}</text>')
 
-    known = [r for r in runs if r.result.success is not None]
-    if not known:
-        return "<p>No outcome data for pattern analysis.</p>"
-    baseline = sum(1 for r in known if r.result.success) / len(known)
+        # Cells
+        row = alignment.matrix[orig_idx]
+        for col in range(n_cols):
+            val = row[col] if col < len(row) else GAP
+            color = STEP_COLORS.get(val, DEFAULT_COLOR)
+            x = label_w + col * cell_w
 
-    positive = [m for m in motifs if m.lift > 1.05][:8]
-    negative = [m for m in motifs if m.lift < 0.95][:8]
+            if val == GAP:
+                # Subtle dot for gaps
+                parts.append(f'<rect x="{x}" y="{y}" width="{cell_w}" height="{cell_h}" fill="#1a1a1e" opacity="0.15"/>')
+            else:
+                parts.append(f'<rect x="{x}" y="{y}" width="{cell_w - 1}" height="{cell_h - 1}" fill="{color}" rx="1">'
+                             f'<title>{val} (run: {rid[:30]})</title></rect>')
 
-    if not positive and not negative:
-        return f"<p>No significant patterns found (baseline: {baseline:.0%} success).</p>"
+    # Cluster separator lines
+    prev_cluster = None
+    for row_idx, orig_idx in enumerate(indices):
+        rid = alignment.run_ids[orig_idx]
+        cluster_id = cluster_result.labels.get(rid, -1)
+        if prev_cluster is not None and cluster_id != prev_cluster:
+            y = marker_h + row_idx * cell_h
+            parts.append(f'<line x1="{label_w}" y1="{y}" x2="{svg_w}" y2="{y}" stroke="#333" stroke-width="1" stroke-dasharray="3,2"/>')
+        prev_cluster = cluster_id
 
-    html = f'<p style="color:#888">Baseline success rate: {baseline:.0%} across {len(known)} runs</p>'
-    html += '<table style="width:100%; border-collapse:collapse; font-size:14px">'
-    html += '<tr style="border-bottom:2px solid #ddd"><th style="text-align:left;padding:8px">Pattern</th>'
-    html += '<th style="text-align:right;padding:8px">Success</th>'
-    html += '<th style="text-align:right;padding:8px">Runs</th>'
-    html += '<th style="text-align:right;padding:8px">p-value</th>'
-    html += '<th style="text-align:left;padding:8px">Position</th></tr>'
-
-    for m in positive:
-        pos = "early" if m.avg_position < 0.3 else ("late" if m.avg_position > 0.7 else "mid")
-        p_str = f"{m.p_value:.3f}" if m.p_value is not None else ""
-        html += f'<tr style="border-bottom:1px solid #eee;background:#f0faf0">'
-        html += f'<td style="padding:8px;font-family:monospace">{m.display}</td>'
-        html += f'<td style="text-align:right;padding:8px;color:#2d7d2d;font-weight:bold">{m.success_rate:.0%}</td>'
-        html += f'<td style="text-align:right;padding:8px">{m.total_runs}</td>'
-        html += f'<td style="text-align:right;padding:8px;color:#888">{p_str}</td>'
-        html += f'<td style="padding:8px;color:#888">{pos}</td></tr>'
-
-    if positive and negative:
-        html += '<tr><td colspan="5" style="padding:4px"></td></tr>'
-
-    for m in negative:
-        pos = "early" if m.avg_position < 0.3 else ("late" if m.avg_position > 0.7 else "mid")
-        p_str = f"{m.p_value:.3f}" if m.p_value is not None else ""
-        html += f'<tr style="border-bottom:1px solid #eee;background:#faf0f0">'
-        html += f'<td style="padding:8px;font-family:monospace">{m.display}</td>'
-        html += f'<td style="text-align:right;padding:8px;color:#c0392b;font-weight:bold">{m.success_rate:.0%}</td>'
-        html += f'<td style="text-align:right;padding:8px">{m.total_runs}</td>'
-        html += f'<td style="text-align:right;padding:8px;color:#888">{p_str}</td>'
-        html += f'<td style="padding:8px;color:#888">{pos}</td></tr>'
-
-    html += '</table>'
-    return html
+    parts.append('</svg>')
+    return '\n'.join(parts)
 
 
-def _build_divergence_cards(
+def _build_divergence_tree(
     points: list[DivergencePoint],
     alignment: Alignment,
     runs: list[Run],
 ) -> str:
-    """Build divergence decision point cards."""
+    """Build a divergence tree showing branching at each significant point."""
     if not points:
         return "<p>No significant divergence points found.</p>"
 
-    run_map = {r.run_id: r for r in runs}
     html = ""
-
     for point in points[:5]:
         p_str = f"p={point.p_value:.3f}" if point.p_value is not None else ""
-        phase_str = point.phase_context or ""
+        phase = point.phase_context or ""
 
-        html += f'<div class="card">'
-        html += f'<div class="card-header">Position {point.column} <span style="color:#888;font-weight:normal">({p_str})</span></div>'
-        if phase_str:
-            html += f'<div class="phase-context">{phase_str}</div>'
+        total_runs = sum(point.value_counts.values())
 
-        # Show branches as proportional bars
-        total = sum(point.value_counts.values())
-        sorted_branches = sorted(point.value_counts.items(), key=lambda x: -x[1])
+        html += f'<div style="margin-bottom:20px">'
+        html += f'<div style="font-size:14px;font-weight:600;margin-bottom:4px">Position {point.column} <span style="color:#888;font-weight:normal;font-size:12px">({p_str})</span></div>'
+        if phase:
+            html += f'<div style="font-size:11px;color:#888;margin-bottom:8px">{phase}</div>'
+
+        # Sort branches: best success rate first
+        sorted_branches = sorted(
+            point.value_counts.items(),
+            key=lambda x: -(point.success_by_value.get(x[0]) or 0)
+        )
 
         for value, count in sorted_branches:
             rate = point.success_by_value.get(value)
-            pct = count / total * 100
-            rate_str = f"{rate:.0%}" if rate is not None else "N/A"
+            pct = count / total_runs * 100
 
-            if rate is not None and rate >= 0.7:
-                bar_color = "#59a14f"
-            elif rate is not None and rate <= 0.3:
-                bar_color = "#e15759"
+            if rate is not None and rate >= 0.6:
+                bar_color = "#2d7d2d"
+                rate_class = "success"
+            elif rate is not None and rate <= 0.2:
+                bar_color = "#c0392b"
+                rate_class = "failure"
             else:
-                bar_color = "#bab0ac"
+                bar_color = "#b07800"
+                rate_class = "mixed"
 
-            # Context window from alignment
+            rate_str = f"{rate:.0%}" if rate is not None else "?"
+            color = STEP_COLORS.get(value, DEFAULT_COLOR)
+
+            # Context from alignment
             context = _get_context_str(point.column, value, alignment)
 
-            html += f'<div class="branch">'
-            html += f'<div class="branch-label"><strong>{value}</strong></div>'
-            html += f'<div class="branch-bar" style="width:{max(pct, 3):.0f}%;background:{bar_color}"></div>'
-            html += f'<div class="branch-stats">{count} runs, {rate_str} success</div>'
-            html += f'</div>'
+            html += '<div class="tree-branch">'
+            html += f'<div style="display:flex;align-items:center;gap:8px;margin:4px 0">'
+            html += f'<span style="width:10px;height:10px;background:{color};border-radius:2px;display:inline-block"></span>'
+            html += f'<span class="tree-label">{value}</span>'
+
+            # Proportional bar
+            bar_w = max(pct * 3, 8)
+            html += f'<svg width="{bar_w + 2}" height="16"><rect x="0" y="2" width="{bar_w}" height="12" fill="{bar_color}" rx="2" opacity="0.8"/></svg>'
+
+            html += f'<span class="tree-stats">{count} runs, <span class="{rate_class}">{rate_str} success</span></span>'
+            html += '</div>'
+
             if context:
-                html += f'<div class="context">{context}</div>'
+                html += f'<div class="tree-context">{context}</div>'
+            html += '</div>'
 
         html += '</div>'
 
@@ -294,11 +284,9 @@ def _build_divergence_cards(
 
 
 def _get_context_str(col: int, value: str, alignment: Alignment) -> str:
-    """Get a context window string for a branch at a divergence point."""
+    """Get context window string for a branch."""
     if not alignment.matrix or not alignment.run_ids:
         return ""
-
-    # Find a run that has this value at this column
     for run_idx, rid in enumerate(alignment.run_ids):
         if run_idx < len(alignment.matrix) and col < len(alignment.matrix[run_idx]):
             if alignment.matrix[run_idx][col] == value:
@@ -318,123 +306,109 @@ def _get_context_str(col: int, value: str, alignment: Alignment) -> str:
     return ""
 
 
-def _build_recommendations(runs: list[Run], points: list[DivergencePoint]) -> str:
-    """Build recommendations section from analysis synthesis."""
+def _build_patterns_table(runs: list[Run]) -> str:
+    """Build patterns table."""
     from moirai.analyze.motifs import find_motifs
-    from moirai.analyze.recommend import synthesize
 
     motifs = find_motifs(runs, min_n=3, max_n=5, min_count=3)
     known = [r for r in runs if r.result.success is not None]
     if not known:
-        return "<p>No outcome data for recommendations.</p>"
+        return "<p>No outcome data.</p>"
     baseline = sum(1 for r in known if r.result.success) / len(known)
 
-    recs = synthesize(motifs, points, len(runs), baseline)
-    if not recs:
-        return "<p>Not enough data to generate recommendations.</p>"
+    positive = [m for m in motifs if m.lift > 1.05][:6]
+    negative = [m for m in motifs if m.lift < 0.95][:6]
 
-    html = ""
-    for i, rec in enumerate(recs, 1):
-        html += f'<div class="rec">'
-        html += f'<div class="rec-action">{i}. {rec.action}</div>'
-        html += f'<div class="rec-impact">{rec.impact}</div>'
-        html += f'<div class="rec-evidence">Evidence: {"; ".join(rec.evidence)}</div>'
-        html += f'</div>'
+    if not positive and not negative:
+        return f"<p>No significant patterns found (baseline: {baseline:.0%}).</p>"
 
+    html = f'<p style="font-size:12px;color:#888;margin-top:0">Baseline: {baseline:.0%} across {len(known)} runs</p>'
+    html += '<table style="width:100%;border-collapse:collapse;font-size:13px">'
+    html += '<tr style="border-bottom:2px solid #e5e5e5"><th style="text-align:left;padding:6px">Pattern</th>'
+    html += '<th style="text-align:right;padding:6px">Success</th>'
+    html += '<th style="text-align:right;padding:6px">Runs</th>'
+    html += '<th style="text-align:right;padding:6px">p</th></tr>'
+
+    for m in positive:
+        p_str = f"{m.p_value:.3f}" if m.p_value is not None else ""
+        html += f'<tr style="border-bottom:1px solid #f0f0f0;background:#f6fbf6">'
+        html += f'<td style="padding:6px;font-family:SF Mono,Menlo,monospace;font-size:12px">{m.display}</td>'
+        html += f'<td style="text-align:right;padding:6px" class="success"><strong>{m.success_rate:.0%}</strong></td>'
+        html += f'<td style="text-align:right;padding:6px;color:#888">{m.total_runs}</td>'
+        html += f'<td style="text-align:right;padding:6px;color:#bbb">{p_str}</td></tr>'
+
+    if positive and negative:
+        html += '<tr><td colspan="4" style="padding:3px"></td></tr>'
+
+    for m in negative:
+        p_str = f"{m.p_value:.3f}" if m.p_value is not None else ""
+        html += f'<tr style="border-bottom:1px solid #f0f0f0;background:#fcf6f6">'
+        html += f'<td style="padding:6px;font-family:SF Mono,Menlo,monospace;font-size:12px">{m.display}</td>'
+        html += f'<td style="text-align:right;padding:6px" class="failure"><strong>{m.success_rate:.0%}</strong></td>'
+        html += f'<td style="text-align:right;padding:6px;color:#888">{m.total_runs}</td>'
+        html += f'<td style="text-align:right;padding:6px;color:#bbb">{p_str}</td></tr>'
+
+    html += '</table>'
     return html
 
 
-# --- Clusters and Diff HTML ---
+# --- Clusters and Diff (unchanged) ---
 
 def write_clusters_html(result: ClusterResult, path: Path, runs: list[Run] | None = None) -> Path:
-    """Write cluster visualization."""
     path = Path(path)
-
     if not result.clusters:
-        _write_empty(path, "No clusters to display.")
+        _write_empty(path, "No clusters.")
         return path
 
     sorted_clusters = sorted(result.clusters, key=lambda c: -c.count)
     run_map = {r.run_id: r for r in runs} if runs else {}
-
-    labels = []
-    counts = []
-    rates = []
-    hover_texts = []
+    labels, counts, rates, hovers = [], [], [], []
 
     for info in sorted_clusters:
         labels.append(f"C{info.cluster_id} ({info.count})")
         counts.append(info.count)
         rates.append(info.success_rate * 100 if info.success_rate is not None else 0)
-
         if run_map:
-            cluster_runs = [run_map[rid] for rid, cid in result.labels.items()
-                           if cid == info.cluster_id and rid in run_map]
-            if cluster_runs:
-                rep = sorted(cluster_runs, key=lambda r: len(r.steps))[len(cluster_runs) // 2]
-                hover_texts.append(compress_phases(rep)[:100])
+            members = [run_map[rid] for rid, cid in result.labels.items() if cid == info.cluster_id and rid in run_map]
+            if members:
+                rep = sorted(members, key=lambda r: len(r.steps))[len(members) // 2]
+                hovers.append(compress_phases(rep)[:100])
             else:
-                hover_texts.append("")
+                hovers.append("")
         else:
-            hover_texts.append("")
+            hovers.append("")
 
     fig = go.Figure()
-    fig.add_trace(go.Bar(
-        name="Run Count", x=labels, y=counts, marker_color="steelblue",
-        hovertext=hover_texts,
-        hovertemplate="%{x}<br>Count: %{y}<br>%{hovertext}<extra></extra>",
-    ))
-    fig.add_trace(go.Bar(
-        name="Success %", x=labels, y=rates, marker_color="seagreen",
-        hovertemplate="%{x}<br>Success: %{y:.0f}%<extra></extra>",
-    ))
-
-    fig.update_layout(title="Cluster Distribution", barmode="group",
-                      xaxis_title="Cluster", yaxis_title="Value", height=500)
+    fig.add_trace(go.Bar(name="Count", x=labels, y=counts, marker_color="steelblue",
+                         hovertext=hovers, hovertemplate="%{x}<br>%{y} runs<br>%{hovertext}<extra></extra>"))
+    fig.add_trace(go.Bar(name="Success %", x=labels, y=rates, marker_color="seagreen"))
+    fig.update_layout(title="Cluster Distribution", barmode="group", height=450)
     fig.write_html(str(path), include_plotlyjs=True)
     return path
 
 
 def write_diff_html(diff: CohortDiff, a_label: str, b_label: str, path: Path) -> Path:
-    """Write cohort comparison."""
     path = Path(path)
-
-    a_rate = diff.a_summary.success_rate
-    b_rate = diff.b_summary.success_rate
-
+    a_rate, b_rate = diff.a_summary.success_rate, diff.b_summary.success_rate
     if a_rate is None and b_rate is None:
-        _write_empty(path, "No success rate data to compare.")
+        _write_empty(path, "No data.")
         return path
 
-    fig = make_subplots(rows=1, cols=2, subplot_titles=("Success Rate & Steps", "Cluster Shifts"))
-
-    metrics = ["Success Rate", "Avg Steps"]
-    a_vals = [(a_rate or 0) * 100, diff.a_summary.avg_steps]
-    b_vals = [(b_rate or 0) * 100, diff.b_summary.avg_steps]
-
-    fig.add_trace(go.Bar(name=f"A: {a_label}", x=metrics, y=a_vals, marker_color="steelblue"), row=1, col=1)
-    fig.add_trace(go.Bar(name=f"B: {b_label}", x=metrics, y=b_vals, marker_color="coral"), row=1, col=1)
+    fig = make_subplots(rows=1, cols=2, subplot_titles=("Metrics", "Cluster Shifts"))
+    fig.add_trace(go.Bar(name=f"A: {a_label}", x=["Success Rate", "Steps"], y=[(a_rate or 0) * 100, diff.a_summary.avg_steps], marker_color="steelblue"), row=1, col=1)
+    fig.add_trace(go.Bar(name=f"B: {b_label}", x=["Success Rate", "Steps"], y=[(b_rate or 0) * 100, diff.b_summary.avg_steps], marker_color="coral"), row=1, col=1)
 
     if diff.cluster_shifts:
         from moirai.viz.terminal import _compress_prototype
-        shift_labels = []
-        shift_values = []
-        shift_colors = []
+        sl, sv, sc = [], [], []
         for proto, delta in diff.cluster_shifts[:10]:
-            compressed = _compress_prototype(proto)
-            if len(compressed) > 30:
-                compressed = compressed[:27] + "..."
-            shift_labels.append(compressed)
-            shift_values.append(delta)
-            shift_colors.append("seagreen" if delta > 0 else "indianred")
+            c = _compress_prototype(proto)
+            sl.append(c[:27] + "..." if len(c) > 30 else c)
+            sv.append(delta)
+            sc.append("seagreen" if delta > 0 else "indianred")
+        fig.add_trace(go.Bar(x=sv, y=sl, orientation="h", marker_color=sc, showlegend=False), row=1, col=2)
 
-        fig.add_trace(go.Bar(
-            x=shift_values, y=shift_labels, orientation="h",
-            marker_color=shift_colors, showlegend=False,
-            hovertemplate="%{y}<br>Shift: %{x} runs<extra></extra>",
-        ), row=1, col=2)
-
-    fig.update_layout(title=f"Cohort Comparison: {a_label} vs {b_label}", barmode="group", height=500)
+    fig.update_layout(title=f"{a_label} vs {b_label}", barmode="group", height=450)
     fig.write_html(str(path), include_plotlyjs=True)
     return path
 
