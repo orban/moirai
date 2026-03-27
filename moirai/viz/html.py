@@ -4,7 +4,7 @@ from pathlib import Path
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from moirai.compress import compress_phases, step_enriched_name
+from moirai.compress import compress_phases
 from moirai.schema import (
     Alignment,
     ClusterResult,
@@ -47,27 +47,55 @@ def write_branch_html(
         return path
 
     from moirai.analyze.cluster import cluster_runs
+    from moirai.analyze.align import align_runs
+    from moirai.analyze.divergence import find_divergence_points
     cluster_result = cluster_runs(runs, level="type", threshold=0.3)
+    run_map = {r.run_id: r for r in runs}
 
-    matrix_html = _build_trajectory_matrix(alignment, points, runs, cluster_result)
-    tree_html = _build_divergence_tree(points, alignment, runs)
+    # Per-cluster: type-level alignment for matrix, name-level for divergence
+    matrix_parts: list[str] = []
+    tree_parts: list[str] = []
+
+    for info in sorted(cluster_result.clusters, key=lambda c: -c.count):
+        members = [run_map[rid] for rid, cid in cluster_result.labels.items()
+                   if cid == info.cluster_id and rid in run_map]
+        if len(members) < 3:
+            continue
+
+        # Type-level alignment for the visual matrix
+        type_alignment = align_runs(members, level="type")
+        rate_str = f"{info.success_rate:.0%}" if info.success_rate is not None else "?"
+        matrix_parts.append(
+            f'<div style="margin-bottom:16px">'
+            f'<div style="font-size:13px;font-weight:600;margin-bottom:4px">Cluster {info.cluster_id}: {info.count} runs, {rate_str} success</div>'
+            + _build_trajectory_matrix(type_alignment, members)
+            + '</div>'
+        )
+
+        # Name-level alignment for divergence analysis
+        name_alignment = align_runs(members, level="name")
+        name_points = find_divergence_points(name_alignment, members)
+        if name_points:
+            tree_parts.append(
+                f'<div style="margin-bottom:20px">'
+                f'<div style="font-size:13px;font-weight:600;margin-bottom:4px">Cluster {info.cluster_id} ({info.count} runs, {rate_str} success)</div>'
+                + _build_divergence_tree(name_points, name_alignment, members)
+                + '</div>'
+            )
+
+    matrix_html = '\n'.join(matrix_parts) if matrix_parts else '<p>No clusters with enough runs.</p>'
+    tree_html = '\n'.join(tree_parts) if tree_parts else '<p>No significant divergence points found.</p>'
     patterns_html = _build_patterns_table(runs)
 
     n_pass = sum(1 for r in runs if r.result.success)
 
-    # Build legend from actual step names present
-    all_names: set[str] = set()
-    for run in runs:
-        for s in run.steps:
-            n = step_enriched_name(s)
-            if n:
-                all_names.add(n)
+    # Type-level legend (simpler, cleaner)
+    type_colors = {"tool": "#4e79a7", "llm": "#b07aa1", "system": "#9c755f", "judge": "#59a14f", "error": "#e15759"}
     legend_items = []
-    for name in sorted(all_names):
-        color = STEP_COLORS.get(name, DEFAULT_COLOR)
-        legend_items.append(f'<span style="display:inline-flex;align-items:center;gap:3px;margin-right:12px">'
+    for name, color in type_colors.items():
+        legend_items.append(f'<span style="display:inline-flex;align-items:center;gap:3px;margin-right:16px">'
                            f'<span style="width:10px;height:10px;background:{color};border-radius:2px;display:inline-block"></span>'
-                           f'<span style="font-size:11px">{name}</span></span>')
+                           f'<span style="font-size:12px">{name}</span></span>')
     legend_html = '<div style="line-height:2">' + ''.join(legend_items) + '</div>'
 
     html = f"""<!DOCTYPE html>
@@ -130,86 +158,60 @@ def write_branch_html(
     return path
 
 
-def _build_trajectory_matrix(
-    alignment: Alignment,
-    points: list[DivergencePoint],
-    runs: list[Run],
-    cluster_result: ClusterResult,
-) -> str:
-    """Build an SVG trajectory alignment matrix.
+TYPE_COLORS = {"tool": "#4e79a7", "llm": "#b07aa1", "system": "#9c755f", "judge": "#59a14f", "error": "#e15759"}
+
+
+def _build_trajectory_matrix(alignment: Alignment, runs: list[Run]) -> str:
+    """Build an SVG trajectory alignment matrix for one cluster.
 
     Each row = one run. Each column = one aligned position.
-    Cells colored by enriched step name. Sorted by cluster, then pass/fail.
-    Divergence columns get a red marker on top.
+    Cells colored by step type. Sorted by pass first, then by gap count.
     """
     if not alignment.matrix or not alignment.matrix[0]:
         return "<p>No alignment data.</p>"
 
     success_map = {r.run_id: r.result.success for r in runs}
-    div_cols = {p.column for p in points}
     n_runs = len(alignment.run_ids)
     n_cols = len(alignment.matrix[0])
 
-    # Sort runs: by cluster, then pass first, then by gap count
+    # Sort: pass first, then by gap count (densest first)
     indices = list(range(n_runs))
     indices.sort(key=lambda i: (
-        cluster_result.labels.get(alignment.run_ids[i], 999),
         not (success_map.get(alignment.run_ids[i]) is True),
         sum(1 for v in alignment.matrix[i] if v == GAP),
     ))
 
-    cell_w = max(6, min(14, 900 // n_cols))
-    cell_h = max(4, min(12, 600 // n_runs))
+    cell_w = max(8, min(16, 800 // max(n_cols, 1)))
+    cell_h = max(6, min(14, 400 // max(n_runs, 1)))
     label_w = 180
-    marker_h = 12
-    svg_w = label_w + n_cols * cell_w + 20
-    svg_h = marker_h + n_runs * cell_h + 10
+    svg_w = label_w + n_cols * cell_w + 10
+    svg_h = n_runs * cell_h + 4
 
-    parts = [f'<svg width="{svg_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg" style="font-family:SF Mono,Menlo,monospace;font-size:9px">']
+    parts = [f'<svg width="{svg_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg" '
+             f'style="font-family:SF Mono,Menlo,monospace;font-size:9px">']
 
-    # Divergence markers on top
-    for col in range(n_cols):
-        if col in div_cols:
-            x = label_w + col * cell_w
-            parts.append(f'<rect x="{x}" y="0" width="{cell_w}" height="{marker_h}" fill="#e15759" opacity="0.7"/>')
-            parts.append(f'<text x="{x + cell_w//2}" y="{marker_h - 2}" text-anchor="middle" fill="white" font-size="7">*</text>')
-
-    # Rows
     for row_idx, orig_idx in enumerate(indices):
         rid = alignment.run_ids[orig_idx]
-        y = marker_h + row_idx * cell_h
+        y = row_idx * cell_h
         s = success_map.get(rid)
         tag = "P" if s is True else ("F" if s is False else "?")
         tag_color = "#2d7d2d" if s else "#c0392b"
 
-        # Label
         short_id = rid[:22] + ".." if len(rid) > 24 else rid
-        parts.append(f'<text x="{label_w - 4}" y="{y + cell_h - 1}" text-anchor="end" fill="#666" font-size="8">{short_id}</text>')
-        parts.append(f'<text x="{label_w - 2}" y="{y + cell_h - 1}" text-anchor="end" fill="{tag_color}" font-size="8" font-weight="bold"> {tag}</text>')
+        parts.append(f'<text x="{label_w - 20}" y="{y + cell_h - 2}" text-anchor="end" fill="#888" font-size="8">{short_id}</text>')
+        parts.append(f'<text x="{label_w - 6}" y="{y + cell_h - 2}" text-anchor="end" fill="{tag_color}" font-size="9" font-weight="bold">{tag}</text>')
 
-        # Cells
         row = alignment.matrix[orig_idx]
         for col in range(n_cols):
             val = row[col] if col < len(row) else GAP
-            color = STEP_COLORS.get(val, DEFAULT_COLOR)
             x = label_w + col * cell_w
 
             if val == GAP:
-                # Subtle dot for gaps
-                parts.append(f'<rect x="{x}" y="{y}" width="{cell_w}" height="{cell_h}" fill="#1a1a1e" opacity="0.15"/>')
+                parts.append(f'<rect x="{x}" y="{y}" width="{cell_w}" height="{cell_h}" fill="#f0f0f0"/>')
             else:
+                color = TYPE_COLORS.get(val, DEFAULT_COLOR)
                 parts.append(f'<rect x="{x}" y="{y}" width="{cell_w - 1}" height="{cell_h - 1}" fill="{color}" rx="1">'
-                             f'<title>{val} (run: {rid[:30]})</title></rect>')
-
-    # Cluster separator lines
-    prev_cluster = None
-    for row_idx, orig_idx in enumerate(indices):
-        rid = alignment.run_ids[orig_idx]
-        cluster_id = cluster_result.labels.get(rid, -1)
-        if prev_cluster is not None and cluster_id != prev_cluster:
-            y = marker_h + row_idx * cell_h
-            parts.append(f'<line x1="{label_w}" y1="{y}" x2="{svg_w}" y2="{y}" stroke="#333" stroke-width="1" stroke-dasharray="3,2"/>')
-        prev_cluster = cluster_id
+                             f'<title>col {col}: {val} ({rid[:30]})</title></rect>')
 
     parts.append('</svg>')
     return '\n'.join(parts)
