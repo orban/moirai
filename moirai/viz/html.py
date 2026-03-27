@@ -259,65 +259,106 @@ def _build_divergence_tree(
     alignment: Alignment,
     runs: list[Run],
 ) -> str:
-    """Build a divergence tree showing branching at each significant point."""
+    """Build SVG decision trees for divergence points."""
     if not points:
         return "<p>No significant divergence points found.</p>"
 
+    total_all = len(runs)
     html = ""
-    for point in points[:5]:
+
+    for point in points[:4]:
         p_str = f"p={point.p_value:.3f}" if point.p_value is not None else ""
-        phase = point.phase_context or ""
 
-        total_runs = sum(point.value_counts.values())
-
-        html += f'<div style="margin-bottom:20px">'
-        html += f'<div style="font-size:14px;font-weight:600;margin-bottom:4px">Position {point.column} <span style="color:#888;font-weight:normal;font-size:12px">({p_str})</span></div>'
-        if phase:
-            html += f'<div style="font-size:11px;color:#888;margin-bottom:8px">{phase}</div>'
-
-        # Sort branches: best success rate first
         sorted_branches = sorted(
             point.value_counts.items(),
             key=lambda x: -(point.success_by_value.get(x[0]) or 0)
         )
+        n_branches = len(sorted_branches)
+        total_at_point = sum(point.value_counts.values())
 
-        for value, count in sorted_branches:
+        # SVG dimensions
+        node_w, node_h = 160, 56
+        leaf_w, leaf_h = 150, 64
+        h_gap = 20
+        tree_w = n_branches * (leaf_w + h_gap) - h_gap
+        tree_h = 200
+        cx = tree_w // 2 + 40  # center of root node
+        root_x = cx - node_w // 2
+        root_y = 10
+
+        svg_w = max(tree_w + 80, node_w + 80)
+        svg_h = tree_h
+
+        svg = [f'<svg width="{svg_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg" '
+               f'style="font-family:-apple-system,BlinkMacSystemFont,sans-serif">']
+
+        # Root node
+        svg.append(f'<rect x="{root_x}" y="{root_y}" width="{node_w}" height="{node_h}" '
+                   f'rx="6" fill="#f8f8f8" stroke="#ccc"/>')
+        svg.append(f'<text x="{cx}" y="{root_y + 20}" text-anchor="middle" font-size="12" font-weight="600" fill="#333">'
+                   f'Position {point.column}</text>')
+        svg.append(f'<text x="{cx}" y="{root_y + 36}" text-anchor="middle" font-size="10" fill="#888">'
+                   f'{total_at_point} runs, {p_str}</text>')
+        svg.append(f'<text x="{cx}" y="{root_y + 50}" text-anchor="middle" font-size="9" fill="#aaa">'
+                   f'{point.phase_context or ""}</text>')
+
+        # Leaf nodes
+        leaf_y = root_y + node_h + 60
+        total_leaf_w = n_branches * (leaf_w + h_gap) - h_gap
+        start_x = cx - total_leaf_w // 2
+
+        for i, (value, count) in enumerate(sorted_branches):
             rate = point.success_by_value.get(value)
-            pct = count / total_runs * 100
+            rate_str = f"{rate:.0%}" if rate is not None else "?"
 
             if rate is not None and rate >= 0.6:
-                bar_color = "#2d7d2d"
-                rate_class = "success"
+                fill = "#e8f5e9"
+                stroke = "#2d7d2d"
+                text_color = "#2d7d2d"
             elif rate is not None and rate <= 0.2:
-                bar_color = "#c0392b"
-                rate_class = "failure"
+                fill = "#fce4ec"
+                stroke = "#c0392b"
+                text_color = "#c0392b"
             else:
-                bar_color = "#b07800"
-                rate_class = "mixed"
+                fill = "#fff8e1"
+                stroke = "#b07800"
+                text_color = "#b07800"
 
-            rate_str = f"{rate:.0%}" if rate is not None else "?"
-            color = STEP_COLORS.get(value, DEFAULT_COLOR)
+            lx = start_x + i * (leaf_w + h_gap)
+            lcx = lx + leaf_w // 2
 
-            # Context from alignment
+            # Edge from root to leaf
+            edge_thickness = max(1, count / total_at_point * 6)
+            svg.append(f'<line x1="{cx}" y1="{root_y + node_h}" x2="{lcx}" y2="{leaf_y}" '
+                       f'stroke="{stroke}" stroke-width="{edge_thickness:.1f}" opacity="0.6"/>')
+
+            # Edge label (step name)
+            mid_y = root_y + node_h + 28
+            step_color = STEP_COLORS.get(value, DEFAULT_COLOR)
+            svg.append(f'<rect x="{lcx - 50}" y="{mid_y - 9}" width="100" height="18" rx="9" '
+                       f'fill="{step_color}" opacity="0.9"/>')
+            svg.append(f'<text x="{lcx}" y="{mid_y + 4}" text-anchor="middle" font-size="9" fill="white" font-weight="600">'
+                       f'{value}</text>')
+
+            # Leaf node
+            svg.append(f'<rect x="{lx}" y="{leaf_y}" width="{leaf_w}" height="{leaf_h}" '
+                       f'rx="6" fill="{fill}" stroke="{stroke}" stroke-width="1.5"/>')
+            svg.append(f'<text x="{lcx}" y="{leaf_y + 22}" text-anchor="middle" font-size="18" '
+                       f'font-weight="700" fill="{text_color}">{rate_str}</text>')
+            svg.append(f'<text x="{lcx}" y="{leaf_y + 40}" text-anchor="middle" font-size="11" fill="#666">'
+                       f'{count} runs</text>')
+
+            # Context
             context = _get_context_str(point.column, value, alignment, runs)
-
-            html += '<div class="tree-branch">'
-            html += f'<div style="display:flex;align-items:center;gap:8px;margin:4px 0">'
-            html += f'<span style="width:10px;height:10px;background:{color};border-radius:2px;display:inline-block"></span>'
-            html += f'<span class="tree-label">{value}</span>'
-
-            # Proportional bar
-            bar_w = max(pct * 3, 8)
-            html += f'<svg width="{bar_w + 2}" height="16"><rect x="0" y="2" width="{bar_w}" height="12" fill="{bar_color}" rx="2" opacity="0.8"/></svg>'
-
-            html += f'<span class="tree-stats">{count} runs, <span class="{rate_class}">{rate_str} success</span></span>'
-            html += '</div>'
+            if context and len(context) > 40:
+                context = context[:37] + "..."
 
             if context:
-                html += f'<div class="tree-context">{context}</div>'
-            html += '</div>'
+                svg.append(f'<text x="{lcx}" y="{leaf_y + 54}" text-anchor="middle" font-size="8" fill="#aaa">'
+                           f'{context}</text>')
 
-        html += '</div>'
+        svg.append('</svg>')
+        html += '<div style="margin-bottom:16px">' + '\n'.join(svg) + '</div>'
 
     return html
 
