@@ -88,7 +88,8 @@ def write_branch_html(
 </style>
 </head>
 <body>
-<h1>moirai branch analysis</h1>
+<h1>moirai</h1>
+<p style="color:#666;margin-top:0">Trajectory divergence analysis</p>
 <div class="stats">
   <div class="stat"><div class="stat-value">{len(runs)}</div><div class="stat-label">runs</div></div>
   <div class="stat"><div class="stat-value">{n_pass}/{len(runs)}</div><div class="stat-label">pass / total</div></div>
@@ -96,26 +97,26 @@ def write_branch_html(
 </div>
 
 <div class="panel">
-<h2>Recommendations</h2>
-<p>What to change based on this analysis, ranked by expected impact.</p>
+<h2>What to change</h2>
+<p>Findings ranked by expected impact on success rate.</p>
 {recs_html}
 </div>
 
 <div class="panel">
-<h2>Behavioral Modes</h2>
-<p>Each bar is a cluster of runs that follow a similar trajectory. Width = run count, color = success rate.</p>
+<h2>How agents behave</h2>
+<p>Runs clustered by trajectory structure. Width = count, color = success rate (green = high, red = low).</p>
 {profiles_html}
 </div>
 
 <div class="panel">
-<h2>Discriminative Patterns</h2>
-<p>Step sequences that predict success or failure, sorted by deviation from baseline.</p>
+<h2>Patterns that predict failure</h2>
+<p>Step sequences significantly correlated with success or failure.</p>
 {patterns_html}
 </div>
 
 <div class="panel">
-<h2>Key Decision Points</h2>
-<p>Positions in the trajectory where the agent's choice significantly affects outcome.</p>
+<h2>Where trajectories diverge</h2>
+<p>Aligned positions where the agent's next step statistically predicts success or failure.</p>
 {divergence_html}
 </div>
 
