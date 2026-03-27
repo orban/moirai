@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from moirai.analyze.align import NOISE_NAMES
+from moirai.compress import step_enriched_name
 from moirai.schema import Run
 
 
@@ -31,8 +31,8 @@ class Motif:
 
 
 def _filtered_names(run: Run) -> list[str]:
-    """Get filtered step name sequence (no noise)."""
-    return [s.name for s in run.steps if s.name not in NOISE_NAMES]
+    """Get enriched step name sequence (no noise, with attr context)."""
+    return [n for s in run.steps if (n := step_enriched_name(s)) is not None]
 
 
 def _extract_ngrams(names: list[str], min_n: int = 3, max_n: int = 5) -> list[tuple[tuple[str, ...], float]]:

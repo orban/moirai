@@ -60,12 +60,10 @@ def _nw_align(
     return aligned_a, aligned_b
 
 
-NOISE_NAMES = {"error_observation", "action"}
-
-
 def _get_sequence(run: Run, level: str) -> list[str]:
     if level == "name":
-        return [s.name for s in run.steps if s.name not in NOISE_NAMES]
+        from moirai.compress import step_enriched_name
+        return [n for s in run.steps if (n := step_enriched_name(s)) is not None]
     if level == "type":
         return step_type_sequence(run)
     raise ValueError(f"invalid level '{level}', expected 'type' or 'name'")

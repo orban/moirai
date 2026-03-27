@@ -53,19 +53,71 @@ def step_phase(step: Step) -> str:
 NOISE_STEPS = {"error_observation", "action"}
 
 
-def step_display_name(step: Step) -> str | None:
-    """Get a human-readable display name for a step.
+def step_enriched_name(step: Step) -> str | None:
+    """Get an enriched step label using attrs for context.
 
-    Returns None for noisy steps that should be filtered.
-    Annotates test results with pass/fail.
+    Returns None for noise steps.
+    Combines step name with semantic context from attrs:
+      read(source), read(config), read(test_file)
+      search(specific), search(glob)
+      bash(explore), bash(python), bash(setup)
+      edit(source), write(source), etc.
     """
     if step.name in NOISE_STEPS:
         return None
     if step.name == "test_result":
-        if step.status != "ok":
-            return "test(fail)"
-        return "test(pass)"
+        return "test(fail)" if step.status != "ok" else "test(pass)"
+
+    # If no attrs, fall back to plain name
+    if not step.attrs:
+        return step.name
+
+    import os
+
+    # File operations: classify by file type
+    fp = step.attrs.get("file_path", "")
+    if fp and step.name in ("read", "edit", "write"):
+        basename = os.path.basename(fp)
+        ext = os.path.splitext(basename)[1]
+        if basename in ("CLAUDE.md", "MEMORY.md", "AGENTS.md", "README.md"):
+            return f"{step.name}(config)"
+        if "test" in basename.lower():
+            return f"{step.name}(test_file)"
+        if ext in (".py", ".rb", ".js", ".ts", ".go", ".rs", ".java", ".c", ".cpp", ".h"):
+            return f"{step.name}(source)"
+        if ext in (".json", ".toml", ".yaml", ".yml", ".cfg", ".ini"):
+            return f"{step.name}(config)"
+        return f"{step.name}(other)"
+
+    # Search: glob vs specific
+    pat = step.attrs.get("pattern", "")
+    if pat and step.name == "search":
+        return "search(glob)" if "*" in pat else "search(specific)"
+
+    # Bash: classify by command content
+    cmd = step.attrs.get("command", "")
+    if cmd and step.name == "bash":
+        cmd_lower = cmd.lower()
+        if any(kw in cmd_lower for kw in ("ls ", "find ", "tree ", "du ")):
+            return "bash(explore)"
+        if any(kw in cmd_lower for kw in ("python", "pip ", "uv ", "node ", "npm ")):
+            return "bash(python)"
+        if any(kw in cmd_lower for kw in ("cat ", "head ", "tail ", "less ", "wc ")):
+            return "bash(read)"
+        if any(kw in cmd_lower for kw in ("mkdir ", "touch ", "chmod ", "git ")):
+            return "bash(setup)"
+        return "bash(other)"
+
     return step.name
+
+
+def step_display_name(step: Step) -> str | None:
+    """Get a human-readable display name for a step.
+
+    Returns None for noisy steps that should be filtered.
+    Uses enriched name if attrs provide context, otherwise plain name.
+    """
+    return step_enriched_name(step)
 
 
 # --- Run-length encoding ---

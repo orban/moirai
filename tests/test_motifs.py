@@ -16,7 +16,11 @@ class TestFilteredNames:
 
     def test_keeps_meaningful(self):
         run = _make_run("r1", ["read", "search", "write", "test_result"], True)
-        assert _filtered_names(run) == ["read", "search", "write", "test_result"]
+        result = _filtered_names(run)
+        assert result[0] == "read"
+        assert result[1] == "search"
+        assert result[2] == "write"
+        assert result[3] == "test(pass)"  # test_result with ok status → test(pass)
 
 
 class TestExtractNgrams:
