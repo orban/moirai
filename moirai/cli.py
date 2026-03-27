@@ -155,43 +155,73 @@ def clusters(
 @app.command()
 def branch(
     path: Path = typer.Argument(..., help="Path to a run file or directory"),
-    threshold: float = typer.Option(0.3, help="Clustering distance threshold"),
     strict: bool = typer.Option(False, help="Treat warnings as errors"),
     model: str | None = typer.Option(None, help="Filter by model"),
     harness: str | None = typer.Option(None, help="Filter by harness"),
     task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
     html: Path | None = typer.Option(None, help="Write HTML output to path"),
 ) -> None:
-    """Multi-run divergence analysis. Clusters first, then aligns within each cluster."""
+    """Per-task divergence analysis. Groups by task_id, aligns repeated runs, finds where they split."""
     runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
 
-    from moirai.analyze.cluster import cluster_runs
+    from collections import defaultdict
     from moirai.analyze.align import align_runs
     from moirai.analyze.divergence import find_divergence_points
-    from moirai.viz.terminal import print_cluster_divergence
 
-    # Cluster at type level (broad grouping), then align within clusters at name level (fine detail)
-    cluster_result = cluster_runs(runs, level="type", threshold=threshold)
-    run_map = {r.run_id: r for r in runs}
+    # Group by task_id — alignment only makes sense for repeated runs of the same task
+    tasks: dict[str, list] = defaultdict(list)
+    for r in runs:
+        tasks[r.task_id].append(r)
 
-    cluster_divergences = []
-    for info in sorted(cluster_result.clusters, key=lambda c: -c.count):
-        if info.count < 3:
-            continue  # need at least 3 runs for meaningful alignment
+    # Only tasks with mixed outcomes (both pass and fail)
+    mixed_tasks = {tid: trs for tid, trs in tasks.items()
+                   if any(r.result.success for r in trs) and any(not r.result.success for r in trs)
+                   and len(trs) >= 3}
 
-        cluster_runs_list = [run_map[rid] for rid, cid in cluster_result.labels.items()
-                             if cid == info.cluster_id and rid in run_map]
+    if not mixed_tasks:
+        console.print("No tasks with mixed pass/fail outcomes (need 3+ runs per task)")
+        raise typer.Exit(0)
 
-        alignment = align_runs(cluster_runs_list, level="name")
-        points = find_divergence_points(alignment, cluster_runs_list)
-        cluster_divergences.append((info, alignment, points, cluster_runs_list))
+    console.print(f"[bold]{len(mixed_tasks)} tasks with mixed outcomes[/bold] (out of {len(tasks)} total)\n")
 
-    print_cluster_divergence(cluster_divergences)
+    task_results = []
+    for tid in sorted(mixed_tasks, key=lambda t: -len(mixed_tasks[t])):
+        task_runs = mixed_tasks[tid]
+        alignment = align_runs(task_runs, level="name")
+        points = find_divergence_points(alignment, task_runs, min_branch_size=1, p_threshold=0.5)
 
-    if html and cluster_divergences:
-        biggest = cluster_divergences[0]
+        n_pass = sum(1 for r in task_runs if r.result.success)
+        n_fail = len(task_runs) - n_pass
+        n_cols = len(alignment.matrix[0]) if alignment.matrix and alignment.matrix[0] else 0
+
+        task_results.append((tid, task_runs, alignment, points))
+
+        console.print(f"[bold]{tid}[/bold]: {len(task_runs)} runs ({n_pass}P/{n_fail}F), aligned to {n_cols} columns")
+
+        if not points:
+            console.print("  [dim]No significant divergence points[/dim]\n")
+            continue
+
+        for point in points[:3]:
+            p_str = f"p={point.p_value:.3f}" if point.p_value is not None else ""
+            console.print(f"  [bold]Position {point.column}[/bold] ({p_str})")
+            if point.phase_context:
+                console.print(f"  [dim]{point.phase_context}[/dim]")
+            for value, count in sorted(point.value_counts.items(), key=lambda x: -x[1]):
+                rate = point.success_by_value.get(value)
+                rate_str = f"{rate:.0%}" if rate is not None else "?"
+                if rate is not None and rate >= 0.6:
+                    color = "green"
+                elif rate is not None and rate <= 0.2:
+                    color = "red"
+                else:
+                    color = "yellow"
+                console.print(f"    [{color}]{value}[/{color}]: {count} runs, {rate_str} success")
+        console.print()
+
+    if html:
         from moirai.viz.html import write_branch_html
-        out = write_branch_html(biggest[1], biggest[2], biggest[3], html)
+        out = write_branch_html(None, [], runs, html, task_results=task_results)
         console.print(f"\nHTML written to {out}")
 
 

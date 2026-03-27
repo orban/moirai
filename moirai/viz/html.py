@@ -34,68 +34,71 @@ DEFAULT_COLOR = "#bab0ac"
 
 
 def write_branch_html(
-    alignment: Alignment,
+    alignment: Alignment | None,
     points: list[DivergencePoint],
     runs: list[Run],
     path: Path,
+    task_results: list | None = None,
 ) -> Path:
-    """Write branch analysis dashboard with trajectory matrix and divergence tree."""
+    """Write branch analysis dashboard with per-task trajectory matrices and divergence trees."""
     path = Path(path)
 
     if not runs:
         _write_empty(path, "No runs to display.")
         return path
 
-    from moirai.analyze.cluster import cluster_runs
-    from moirai.analyze.align import align_runs
-    from moirai.analyze.divergence import find_divergence_points
-    cluster_result = cluster_runs(runs, level="type", threshold=0.3)
-    run_map = {r.run_id: r for r in runs}
-
-    # Per-cluster: type-level alignment for matrix, name-level for divergence
     matrix_parts: list[str] = []
     tree_parts: list[str] = []
 
-    for info in sorted(cluster_result.clusters, key=lambda c: -c.count):
-        members = [run_map[rid] for rid, cid in cluster_result.labels.items()
-                   if cid == info.cluster_id and rid in run_map]
-        if len(members) < 3:
-            continue
+    if task_results:
+        # Per-task mode: each task gets its own aligned matrix and divergence tree
+        for tid, task_runs, task_alignment, task_points in task_results:
+            if not task_alignment.matrix or not task_alignment.matrix[0]:
+                continue
 
-        # Type-level alignment for the visual matrix
-        type_alignment = align_runs(members, level="type")
-        rate_str = f"{info.success_rate:.0%}" if info.success_rate is not None else "?"
-        matrix_parts.append(
-            f'<div style="margin-bottom:16px">'
-            f'<div style="font-size:13px;font-weight:600;margin-bottom:4px">Cluster {info.cluster_id}: {info.count} runs, {rate_str} success</div>'
-            + _build_trajectory_matrix(type_alignment, members)
-            + '</div>'
-        )
+            n_pass = sum(1 for r in task_runs if r.result.success)
+            n_fail = len(task_runs) - n_pass
+            n_cols = len(task_alignment.matrix[0])
 
-        # Name-level alignment for divergence analysis
-        name_alignment = align_runs(members, level="name")
-        name_points = find_divergence_points(name_alignment, members)
-        if name_points:
-            tree_parts.append(
+            matrix_parts.append(
                 f'<div style="margin-bottom:20px">'
-                f'<div style="font-size:13px;font-weight:600;margin-bottom:4px">Cluster {info.cluster_id} ({info.count} runs, {rate_str} success)</div>'
-                + _build_divergence_tree(name_points, name_alignment, members)
+                f'<div style="font-size:13px;font-weight:600;margin-bottom:2px">{tid}</div>'
+                f'<div style="font-size:11px;color:#888;margin-bottom:6px">{len(task_runs)} runs ({n_pass}P/{n_fail}F), {n_cols} aligned columns</div>'
+                + _build_trajectory_matrix(task_alignment, task_runs)
                 + '</div>'
             )
 
-    matrix_html = '\n'.join(matrix_parts) if matrix_parts else '<p>No clusters with enough runs.</p>'
+            if task_points:
+                tree_parts.append(
+                    f'<div style="margin-bottom:20px">'
+                    f'<div style="font-size:13px;font-weight:600;margin-bottom:4px">{tid} ({n_pass}P/{n_fail}F)</div>'
+                    + _build_divergence_tree(task_points, task_alignment, task_runs)
+                    + '</div>'
+                )
+
+    matrix_html = '\n'.join(matrix_parts) if matrix_parts else '<p>No tasks with enough data.</p>'
     tree_html = '\n'.join(tree_parts) if tree_parts else '<p>No significant divergence points found.</p>'
     patterns_html = _build_patterns_table(runs)
 
     n_pass = sum(1 for r in runs if r.result.success)
+    n_tasks = len(task_results) if task_results else 0
+    n_div = sum(len(pts) for _, _, _, pts in task_results) if task_results else len(points)
 
-    # Type-level legend (simpler, cleaner)
-    type_colors = {"tool": "#4e79a7", "llm": "#b07aa1", "system": "#9c755f", "judge": "#59a14f", "error": "#e15759"}
+    # Build legend from step names actually present in the data
+    all_names: set[str] = set()
+    if task_results:
+        for _, task_runs, alignment, _ in task_results:
+            if alignment.matrix:
+                for row in alignment.matrix:
+                    for v in row:
+                        if v != GAP:
+                            all_names.add(v)
     legend_items = []
-    for name, color in type_colors.items():
-        legend_items.append(f'<span style="display:inline-flex;align-items:center;gap:3px;margin-right:16px">'
+    for name in sorted(all_names):
+        color = STEP_COLORS.get(name, TYPE_COLORS.get(name, DEFAULT_COLOR))
+        legend_items.append(f'<span style="display:inline-flex;align-items:center;gap:3px;margin-right:12px">'
                            f'<span style="width:10px;height:10px;background:{color};border-radius:2px;display:inline-block"></span>'
-                           f'<span style="font-size:12px">{name}</span></span>')
+                           f'<span style="font-size:11px">{name}</span></span>')
     legend_html = '<div style="line-height:2">' + ''.join(legend_items) + '</div>'
 
     html = f"""<!DOCTYPE html>
@@ -129,7 +132,8 @@ def write_branch_html(
 <div class="stats">
   <div><div class="stat-value">{len(runs)}</div><div class="stat-label">runs</div></div>
   <div><div class="stat-value">{n_pass}/{len(runs)}</div><div class="stat-label">pass / total</div></div>
-  <div><div class="stat-value">{len(points)}</div><div class="stat-label">divergence points</div></div>
+  <div><div class="stat-value">{n_tasks}</div><div class="stat-label">tasks with mixed outcomes</div></div>
+  <div><div class="stat-value">{n_div}</div><div class="stat-label">divergence points</div></div>
 </div>
 
 <div class="panel">
@@ -162,15 +166,41 @@ TYPE_COLORS = {"tool": "#4e79a7", "llm": "#b07aa1", "system": "#9c755f", "judge"
 
 
 def _build_trajectory_matrix(alignment: Alignment, runs: list[Run]) -> str:
-    """Build an SVG trajectory alignment matrix for one cluster.
+    """Build an SVG trajectory alignment matrix.
 
     Each row = one run. Each column = one aligned position.
-    Cells colored by step type. Sorted by pass first, then by gap count.
+    Cells colored by enriched step name. Tooltips show attrs detail.
+    Sorted by pass first, then by gap count.
     """
     if not alignment.matrix or not alignment.matrix[0]:
         return "<p>No alignment data.</p>"
 
     success_map = {r.run_id: r.result.success for r in runs}
+
+    # Build step detail lookup: (run_id, step_name_at_position) -> attrs detail
+    # We match alignment values back to the original steps by position
+    step_details: dict[str, list[str]] = {}  # run_id -> list of detail strings per original step
+    for run in runs:
+        import os
+        details = []
+        for s in run.steps:
+            from moirai.compress import step_enriched_name, NOISE_STEPS
+            if s.name in NOISE_STEPS:
+                continue
+            detail = ""
+            if s.attrs:
+                fp = s.attrs.get("file_path", "")
+                if fp:
+                    detail = os.path.basename(fp)
+                cmd = s.attrs.get("command", "")
+                if cmd:
+                    detail = cmd[:50]
+                pat = s.attrs.get("pattern", "")
+                if pat:
+                    detail = pat[:50]
+            details.append(detail)
+        step_details[run.run_id] = details
+
     n_runs = len(alignment.run_ids)
     n_cols = len(alignment.matrix[0])
 
@@ -202,6 +232,8 @@ def _build_trajectory_matrix(alignment: Alignment, runs: list[Run]) -> str:
         parts.append(f'<text x="{label_w - 6}" y="{y + cell_h - 2}" text-anchor="end" fill="{tag_color}" font-size="9" font-weight="bold">{tag}</text>')
 
         row = alignment.matrix[orig_idx]
+        details = step_details.get(rid, [])
+        non_gap_idx = 0
         for col in range(n_cols):
             val = row[col] if col < len(row) else GAP
             x = label_w + col * cell_w
@@ -209,9 +241,14 @@ def _build_trajectory_matrix(alignment: Alignment, runs: list[Run]) -> str:
             if val == GAP:
                 parts.append(f'<rect x="{x}" y="{y}" width="{cell_w}" height="{cell_h}" fill="#f0f0f0"/>')
             else:
-                color = TYPE_COLORS.get(val, DEFAULT_COLOR)
+                color = STEP_COLORS.get(val, TYPE_COLORS.get(val, DEFAULT_COLOR))
+                detail = details[non_gap_idx] if non_gap_idx < len(details) else ""
+                tooltip = f"{val}"
+                if detail:
+                    tooltip += f" — {detail}"
                 parts.append(f'<rect x="{x}" y="{y}" width="{cell_w - 1}" height="{cell_h - 1}" fill="{color}" rx="1">'
-                             f'<title>col {col}: {val} ({rid[:30]})</title></rect>')
+                             f'<title>{tooltip}</title></rect>')
+                non_gap_idx += 1
 
     parts.append('</svg>')
     return '\n'.join(parts)
@@ -262,7 +299,7 @@ def _build_divergence_tree(
             color = STEP_COLORS.get(value, DEFAULT_COLOR)
 
             # Context from alignment
-            context = _get_context_str(point.column, value, alignment)
+            context = _get_context_str(point.column, value, alignment, runs)
 
             html += '<div class="tree-branch">'
             html += f'<div style="display:flex;align-items:center;gap:8px;margin:4px 0">'
@@ -285,16 +322,44 @@ def _build_divergence_tree(
     return html
 
 
-def _get_context_str(col: int, value: str, alignment: Alignment) -> str:
-    """Get context window string for a branch."""
+def _get_context_str(col: int, value: str, alignment: Alignment, runs: list[Run] | None = None) -> str:
+    """Get context window string for a branch, including attrs detail."""
     if not alignment.matrix or not alignment.run_ids:
         return ""
-    for run_idx, rid in enumerate(alignment.run_ids):
+
+    # Build detail lookup if we have runs
+    detail_for_run: dict[str, list[str]] = {}
+    if runs:
+        import os
+        from moirai.compress import NOISE_STEPS
+        for run in runs:
+            details = []
+            for s in run.steps:
+                if s.name in NOISE_STEPS:
+                    continue
+                detail = ""
+                if s.attrs:
+                    fp = s.attrs.get("file_path", "")
+                    if fp:
+                        detail = os.path.basename(fp)
+                    cmd = s.attrs.get("command", "")
+                    if cmd:
+                        detail = cmd[:40]
+                    pat = s.attrs.get("pattern", "")
+                    if pat:
+                        detail = pat[:40]
+                details.append(detail)
+            detail_for_run[run.run_id] = details
+
+    for run_idx in range(len(alignment.run_ids)):
+        rid = alignment.run_ids[run_idx]
         if run_idx < len(alignment.matrix) and col < len(alignment.matrix[run_idx]):
             if alignment.matrix[run_idx][col] == value:
                 row = alignment.matrix[run_idx]
                 start = max(0, col - 3)
                 end = min(len(row), col + 4)
+
+                # Context line
                 parts = []
                 for i in range(start, end):
                     v = row[i] if i < len(row) else GAP
@@ -304,7 +369,15 @@ def _get_context_str(col: int, value: str, alignment: Alignment) -> str:
                         parts.append(f"[{v}]")
                     else:
                         parts.append(v)
-                return " → ".join(parts)
+                context = " → ".join(parts)
+
+                # Attrs detail for the divergence step itself
+                details = detail_for_run.get(rid, [])
+                non_gap_before = sum(1 for c in range(col) if c < len(row) and row[c] != GAP)
+                if non_gap_before < len(details) and details[non_gap_before]:
+                    context += f"  ({details[non_gap_before]})"
+
+                return context
     return ""
 
 
