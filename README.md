@@ -1,8 +1,8 @@
 # moirai
 
-Trajectory-level debugging for stochastic agent systems.
+Find where agents actually go wrong.
 
-Align rollouts, identify divergence points, and surface behavioral branches that predict success or failure.
+Given 100+ runs of the same task, moirai aligns trajectories and identifies the exact decision points where behavior diverges — and whether those choices predict success or failure.
 
 ```
                        ┌─ read(config) → read(test_file) ─── success (100%)
@@ -17,9 +17,23 @@ run 4─┘                └─ bash(python) → bash(python) ───── 
 
 ## The core idea
 
-Stochastic agents don't fail randomly. When you run the same agent 100 times on the same task, the failures cluster into a small number of recurring behavioral branches. Those branches are identifiable from trajectory structure — *before* you inspect reasoning traces, model internals, or individual logs.
+Agent failures aren't random. When you run the same task 100 times, outcomes cluster into a small number of recurring behavioral branches.
 
-moirai treats agent runs as sequences of steps (tool calls, reasoning turns, test executions), aligns them using Needleman-Wunsch (the same algorithm used for DNA sequence alignment), and statistically tests each aligned position for outcome-predictive divergence.
+moirai finds those branches.
+
+It treats each run as a sequence of steps (tool calls, reasoning turns, test executions), aligns them using Needleman-Wunsch, and tests where different choices lead to different outcomes. Instead of reading 100 traces, you get:
+
+- **where** trajectories split
+- **what choices** lead to success vs failure
+- **which patterns** actually matter
+
+```
+Without moirai:                      With moirai:
+  165 runs                             2 dominant branches
+  19% pass rate                        branch A: read → subagent → search → success (100%)
+  unclear why                          branch B: edit → bash(python) → loop → failure (0%)
+                                       divergence happens around step 15
+```
 
 ## Example: 165 eval-harness runs (19% baseline success)
 
@@ -100,13 +114,21 @@ This run spent 76% of its steps exploring (reading, searching) before making 3 t
 
 ![moirai dashboard](docs/images/dashboard.png)
 
+## What you can do with this
+
+- Detect failure modes that recur across runs
+- Identify early decisions that dominate outcomes
+- Turn behavioral patterns into monitoring rules
+- Focus interpretability on the 2-3 decisions that actually matter
+- Compare harness or model changes at the trajectory level, not just pass rate
+
 ## Why existing tools miss this
 
-**Aggregate metrics** (pass rate, avg tokens, cost) tell you *that* 19% of runs pass but not *whether* they fail the same way or five different ways. A harness change that improves pass rate might fix one failure mode and introduce another. You can't see this from the numbers.
+**Aggregate metrics** tell you *that* 19% of runs pass but not *whether* they all fail the same way or five different ways.
 
-**Raw traces and trace viewers** show you what happened in one run. But if you're running 100 agents on the same task, reading individual traces doesn't scale. You need population-level analysis — what do the successful runs have in common that the failures don't?
+**Trace viewers** show you one run at a time. If you're running 100 agents on the same task, reading individual traces doesn't scale.
 
-**Pass/fail thinking** treats each run as an independent coin flip. But agent behavior is structured. Runs that start with the same exploration strategy often converge to the same outcome. The question isn't "did it pass" but "which behavioral branch did it take, and does that branch predict the outcome?"
+**Pass/fail thinking** treats each run as an independent coin flip. But agent behavior is structured — the question isn't "did it pass" but "which branch did it take?"
 
 moirai operates at the layer between individual traces and aggregate metrics: structural analysis of trajectory populations.
 
