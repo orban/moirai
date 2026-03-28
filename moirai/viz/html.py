@@ -47,11 +47,11 @@ def write_branch_html(
         _write_empty(path, "No runs to display.")
         return path
 
-    matrix_parts: list[str] = []
-    tree_parts: list[str] = []
+    task_sections: list[str] = []
 
     if task_results:
-        # Per-task mode: each task gets its own aligned matrix and divergence tree
+        from moirai.analyze.narrate import narrate_task
+
         for tid, task_runs, task_alignment, task_points in task_results:
             if not task_alignment.matrix or not task_alignment.matrix[0]:
                 continue
@@ -60,46 +60,75 @@ def write_branch_html(
             n_fail = len(task_runs) - n_pass
             n_cols = len(task_alignment.matrix[0])
 
-            matrix_parts.append(
-                f'<div style="margin-bottom:20px">'
-                f'<div style="font-size:13px;font-weight:600;margin-bottom:2px">{tid}</div>'
-                f'<div style="font-size:11px;color:#888;margin-bottom:6px">{len(task_runs)} runs ({n_pass}P/{n_fail}F), {n_cols} aligned columns</div>'
-                + _build_trajectory_matrix(task_alignment, task_runs)
-                + '</div>'
-            )
+            findings = narrate_task(tid, task_runs, task_alignment, task_points)
 
+            section = f'<div class="panel" style="margin-bottom:24px">'
+            section += f'<h2 style="margin-bottom:2px">{tid}</h2>'
+            section += f'<div style="font-size:12px;color:#888;margin-bottom:12px">{len(task_runs)} runs ({n_pass} pass, {n_fail} fail), {n_cols} aligned positions</div>'
+
+            # Narrative findings first
+            if findings:
+                for finding in findings:
+                    section += f'<div style="border-left:3px solid #4e79a7;padding:8px 14px;margin:10px 0;background:#f8fafc">'
+                    section += f'<div style="font-size:14px;font-weight:600;color:#222;margin-bottom:4px">{finding.summary}</div>'
+                    section += f'<div style="font-size:12px;color:#666;margin-bottom:8px">{finding.recommendation}</div>'
+
+                    # Show the branch trajectories side by side
+                    for branch in finding.branches:
+                        rate = branch.success_rate
+                        if rate is not None and rate >= 0.6:
+                            tag_color = "#2d7d2d"
+                            tag_bg = "#e8f5e9"
+                        elif rate is not None and rate <= 0.2:
+                            tag_color = "#c0392b"
+                            tag_bg = "#fce4ec"
+                        else:
+                            tag_color = "#b07800"
+                            tag_bg = "#fff8e1"
+
+                        rate_str = f"{rate:.0%}" if rate is not None else "?"
+                        section += f'<div style="margin:8px 0;padding:6px 10px;background:{tag_bg};border-radius:4px;font-size:12px">'
+                        section += f'<span style="font-weight:700;color:{tag_color}">{rate_str} success</span>'
+                        section += f' — {branch.run_count} runs chose <code>{branch.value}</code>'
+
+                        # Show trajectory steps
+                        step_parts = []
+                        for s in branch.steps:
+                            if s.is_fork:
+                                label = f'<strong style="background:{tag_color};color:white;padding:1px 4px;border-radius:2px">{s.enriched_name}</strong>'
+                            else:
+                                label = f'<span style="color:#666">{s.enriched_name}</span>'
+                            if s.detail:
+                                label += f'<span style="color:#bbb;font-size:10px"> {s.detail}</span>'
+                            step_parts.append(label)
+
+                        section += f'<div style="font-family:SF Mono,Menlo,monospace;font-size:11px;margin-top:4px;line-height:1.8">'
+                        section += ' → '.join(step_parts)
+                        section += '</div></div>'
+
+                    section += '</div>'
+            else:
+                section += '<div style="color:#888;font-size:13px">No significant divergence points in this task.</div>'
+
+            # Matrix as supporting evidence
+            section += f'<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:#888">Show aligned trajectories</summary>'
+            section += f'<div style="margin-top:8px">{_build_trajectory_matrix(task_alignment, task_runs)}</div>'
+            section += '</details>'
+
+            # Tree as supporting evidence
             if task_points:
-                tree_parts.append(
-                    f'<div style="margin-bottom:20px">'
-                    f'<div style="font-size:13px;font-weight:600;margin-bottom:4px">{tid} ({n_pass}P/{n_fail}F)</div>'
-                    + _build_divergence_tree(task_points, task_alignment, task_runs)
-                    + '</div>'
-                )
+                section += f'<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;color:#888">Show decision trees</summary>'
+                section += f'<div style="margin-top:8px">{_build_divergence_tree(task_points, task_alignment, task_runs)}</div>'
+                section += '</details>'
 
-    matrix_html = '\n'.join(matrix_parts) if matrix_parts else '<p>No tasks with enough data.</p>'
-    tree_html = '\n'.join(tree_parts) if tree_parts else '<p>No significant divergence points found.</p>'
+            section += '</div>'
+            task_sections.append(section)
+
     patterns_html = _build_patterns_table(runs)
 
     n_pass = sum(1 for r in runs if r.result.success)
     n_tasks = len(task_results) if task_results else 0
     n_div = sum(len(pts) for _, _, _, pts in task_results) if task_results else len(points)
-
-    # Build legend from step names actually present in the data
-    all_names: set[str] = set()
-    if task_results:
-        for _, task_runs, alignment, _ in task_results:
-            if alignment.matrix:
-                for row in alignment.matrix:
-                    for v in row:
-                        if v != GAP:
-                            all_names.add(v)
-    legend_items = []
-    for name in sorted(all_names):
-        color = STEP_COLORS.get(name, TYPE_COLORS.get(name, DEFAULT_COLOR))
-        legend_items.append(f'<span style="display:inline-flex;align-items:center;gap:3px;margin-right:12px">'
-                           f'<span style="width:10px;height:10px;background:{color};border-radius:2px;display:inline-block"></span>'
-                           f'<span style="font-size:11px">{name}</span></span>')
-    legend_html = '<div style="line-height:2">' + ''.join(legend_items) + '</div>'
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -136,22 +165,11 @@ def write_branch_html(
   <div><div class="stat-value">{n_div}</div><div class="stat-label">divergence points</div></div>
 </div>
 
-<div class="panel">
-<h2>Trajectory alignment</h2>
-<p style="font-size:13px;color:#666;margin-top:0">Every run as a row, aligned by sequence structure. Sorted by cluster, then outcome. Columns with red markers are statistically significant divergence points.</p>
-<div class="legend">{legend_html}</div>
-{matrix_html}
-</div>
+{''.join(task_sections)}
 
 <div class="panel">
-<h2>Where trajectories diverge</h2>
-<p style="font-size:13px;color:#666;margin-top:0">At each divergence point, which choice did agents make and what happened?</p>
-{tree_html}
-</div>
-
-<div class="panel">
-<h2>Patterns that predict failure</h2>
-<p style="font-size:13px;color:#666;margin-top:0">Step sequences significantly correlated with success or failure.</p>
+<h2>Patterns across all tasks</h2>
+<p style="font-size:13px;color:#666;margin-top:0">Step sequences significantly correlated with success or failure across all runs.</p>
 {patterns_html}
 </div>
 
