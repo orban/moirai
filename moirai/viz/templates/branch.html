@@ -374,6 +374,14 @@
         if (src) { $el.appendChild(src.firstElementChild.cloneNode(true)); }
       "></div>
 
+      <!-- LLM Analysis -->
+      <template x-if="task.analysis">
+        <div style="padding:16px 24px;border-top:1px solid var(--border-subtle)">
+          <div style="font-size:9px;font-weight:500;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent);margin-bottom:10px">Analysis</div>
+          <div style="font-family:var(--display);font-size:13px;font-weight:400;color:var(--text-bright);line-height:1.7;white-space:pre-wrap" x-text="task.analysis"></div>
+        </div>
+      </template>
+
       <div x-show="task.comparisons.length" class="comps">
         <template x-for="comp in task.comparisons" :key="comp.number">
           <div class="comp" :id="`fork-${comp.task_id}-${comp.number}`"
@@ -410,13 +418,14 @@
               </div>
             </div>
 
-            <!-- Call to action -->
-            <div style="padding:12px 20px;border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle);background:var(--accent-dim)">
-              <div style="font-size:11px;color:var(--accent);font-weight:500;margin-bottom:4px">Get LLM analysis of this divergence</div>
-              <code style="font-size:10px;color:var(--text);background:var(--bg);padding:4px 8px;border-radius:3px;display:inline-block"
-                >moirai divergence <span x-text="'examples/eval_harness/ --task ' + task.id"></span></code>
-              <div style="font-size:10px;color:var(--text-muted);margin-top:4px">Outputs a structured comparison with full edit diffs, tool outputs, and test results — pipe to Claude Code or any LLM for analysis.</div>
-            </div>
+            <!-- LLM Analysis (if available) or CTA -->
+            <template x-if="!task.analysis">
+              <div style="padding:12px 20px;border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle);background:var(--accent-dim)">
+                <div style="font-size:11px;color:var(--accent);font-weight:500;margin-bottom:4px">Get LLM analysis of this divergence</div>
+                <code style="font-size:10px;color:var(--text);background:var(--bg);padding:4px 8px;border-radius:3px;display:inline-block"
+                  >moirai branch --analyze --html report.html <span x-text="'--task ' + task.id" style="color:var(--accent)"></span></code>
+              </div>
+            </template>
 
             <!-- Aligned diff -->
             <div class="diff-wrap">

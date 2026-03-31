@@ -160,6 +160,7 @@ def branch(
     harness: str | None = typer.Option(None, help="Filter by harness"),
     task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
     html: Path | None = typer.Option(None, help="Write HTML output to path"),
+    analyze: bool = typer.Option(False, help="Run LLM analysis on divergence points (requires anthropic SDK)"),
 ) -> None:
     """Per-task divergence analysis. Groups by task_id, aligns repeated runs, finds where they split."""
     runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
@@ -221,7 +222,7 @@ def branch(
 
     if html:
         from moirai.viz.html import write_branch_html
-        out = write_branch_html(None, [], runs, html, task_results=task_results)
+        out = write_branch_html(None, [], runs, html, task_results=task_results, analyze=analyze)
         console.print(f"\nHTML written to {out}")
 
 

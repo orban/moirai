@@ -58,6 +58,7 @@ def write_branch_html(
     runs: list[Run],
     path: Path,
     task_results: list | None = None,
+    analyze: bool = False,
 ) -> Path:
     path = Path(path)
     if not runs:
@@ -65,7 +66,7 @@ def write_branch_html(
         return path
 
     # Build data payload
-    data = _build_data(runs, task_results)
+    data = _build_data(runs, task_results, analyze=analyze)
 
     # Load template and inject data
     # SVG strings contain Alpine.js attributes with quotes that break JSON embedding.
@@ -92,7 +93,7 @@ def write_branch_html(
     return path
 
 
-def _build_data(runs: list[Run], task_results: list | None) -> dict:
+def _build_data(runs: list[Run], task_results: list | None, analyze: bool = False) -> dict:
     """Build the complete data payload for the template."""
     n_pass = sum(1 for r in runs if r.result.success)
 
@@ -111,6 +112,14 @@ def _build_data(runs: list[Run], task_results: list | None) -> dict:
             total_splits += len(significant)
 
             task_data = _build_task_data(tid, task_runs, task_alignment, significant, Z, dendro)
+
+            # LLM analysis
+            if analyze and task_data["comparisons"]:
+                from moirai.analyze.explain import explain_task
+                analysis = _run_llm_analysis(tid, task_runs)
+                if analysis:
+                    task_data["analysis"] = analysis
+
             tasks.append(task_data)
 
     patterns = _build_patterns_data(runs)
@@ -544,6 +553,36 @@ def _build_dendrogram_heatmap_svg(
 # ---------------------------------------------------------------------------
 # Patterns data
 # ---------------------------------------------------------------------------
+
+def _run_llm_analysis(task_id: str, runs: list[Run]) -> str | None:
+    """Run LLM analysis on a task's divergence. Returns markdown string or None."""
+    import sys
+
+    try:
+        import anthropic
+    except ImportError:
+        print("  skipping analysis: pip install anthropic && export ANTHROPIC_API_KEY=...", file=sys.stderr)
+        return None
+
+    from moirai.analyze.explain import explain_task
+
+    prompt = explain_task(task_id, runs)
+    if not prompt or "no mixed outcomes" in prompt:
+        return None
+
+    try:
+        client = anthropic.Anthropic()
+        print(f"  analyzing {task_id}...", file=sys.stderr)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text
+    except Exception as e:
+        print(f"  warning: LLM analysis failed for {task_id}: {e}", file=sys.stderr)
+        return None
+
 
 def _build_patterns_data(runs: list[Run]) -> dict:
     from moirai.analyze.motifs import find_motifs
