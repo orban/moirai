@@ -54,11 +54,12 @@ def chi_squared_test(branches: list[tuple[int, int]]) -> float:
     if total == 0:
         return 1.0
 
+    # Filter out zero-count branches to avoid inflating df
+    active = [(s, f) for s, f in branches if s + f > 0]
+
     chi2 = 0.0
-    for s, f in branches:
+    for s, f in active:
         n_branch = s + f
-        if n_branch == 0:
-            continue
         expected_s = n_branch * total_s / total
         expected_f = n_branch * total_f / total
         if expected_s > 0:
@@ -66,7 +67,7 @@ def chi_squared_test(branches: list[tuple[int, int]]) -> float:
         if expected_f > 0:
             chi2 += (f - expected_f) ** 2 / expected_f
 
-    df = len(branches) - 1
+    df = len(active) - 1
     if df <= 0:
         return 1.0
 
@@ -87,12 +88,12 @@ def chi2_sf(x: float, df: int) -> float:
 
 def benjamini_hochberg(
     p_values: list[float | None],
-    q: float = 0.05,
 ) -> list[float | None]:
     """Benjamini-Hochberg FDR correction.
 
     Takes a list of raw p-values (None entries are skipped and preserved).
-    Returns adjusted q-values in the same order.
+    Returns adjusted q-values in the same order. Callers filter by their
+    own q-threshold after calling this function.
     """
     if not p_values:
         return []
@@ -162,7 +163,7 @@ def permutation_fdr(
 
     # Count actual discoveries
     actual_p_values = _vectorized_p_values(membership, outcomes)
-    actual_q = benjamini_hochberg(actual_p_values.tolist(), q=q_threshold)
+    actual_q = benjamini_hochberg(actual_p_values.tolist())
     actual_discoveries = sum(1 for qv in actual_q if qv is not None and qv <= q_threshold)
 
     if actual_discoveries == 0:
@@ -172,7 +173,7 @@ def permutation_fdr(
     for _ in range(n_permutations):
         shuffled = rng.permutation(outcomes)
         perm_p_values = _vectorized_p_values(membership, shuffled)
-        perm_q = benjamini_hochberg(perm_p_values.tolist(), q=q_threshold)
+        perm_q = benjamini_hochberg(perm_p_values.tolist())
         n_disc = sum(1 for qv in perm_q if qv is not None and qv <= q_threshold)
         discoveries_per_perm.append(n_disc)
 
@@ -222,16 +223,17 @@ def _vectorized_p_values(
         mask_f = exp_num_f > 0
         chi2[mask_f] += (obs_f[mask_f] - exp_num_f[mask_f]) ** 2 / exp_num_f[mask_f]
 
-    # Chi-squared survival function with df=1
-    # Wilson-Hilferty approximation
+    # Chi-squared survival function with df=1 (Wilson-Hilferty approximation)
+    # Guard: chi2 <= 0 → p = 1.0 (consistent with scalar chi2_sf)
     df = 1
-    z = ((chi2 / df) ** (1 / 3) - (1 - 2 / (9 * df))) / math.sqrt(2 / (9 * df))
-    p_values = 0.5 * np.vectorize(math.erfc)(z / math.sqrt(2))
+    z = np.where(
+        chi2 > 0,
+        ((chi2 / df) ** (1 / 3) - (1 - 2 / (9 * df))) / math.sqrt(2 / (9 * df)),
+        -np.inf,
+    )
+    p_values = np.where(chi2 > 0, 0.5 * np.vectorize(math.erfc)(z / math.sqrt(2)), 1.0)
 
-    # Clamp to [0, 1]
     p_values = np.clip(p_values, 0.0, 1.0)
-
-    # Patterns with zero total (shouldn't happen with membership matrix) get p=1
     p_values[with_total == 0] = 1.0
 
     return p_values

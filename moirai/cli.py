@@ -203,7 +203,7 @@ def branch(
             continue
 
         for point in points[:3]:
-            p_str = f"p={point.p_value:.3f}" if point.p_value is not None else ""
+            p_str = f"q={point.q_value:.3f}" if getattr(point, "q_value", None) is not None else (f"p={point.p_value:.3f}" if point.p_value is not None else "")
             console.print(f"  [bold]Position {point.column}[/bold] ({p_str})")
             if point.phase_context:
                 console.print(f"  [dim]{point.phase_context}[/dim]")
@@ -269,6 +269,7 @@ def patterns(
         # Build boolean membership matrix (patterns × runs)
         # For contiguous motifs, check n-gram membership
         # For gapped motifs, check ordered subsequence membership
+        from moirai.analyze.motifs import _is_subsequence
         from moirai.schema import GappedMotif
 
         run_names: list[list[str]] = [_filtered_names(run) for run in known]
@@ -280,7 +281,7 @@ def patterns(
         rows: list[list[bool]] = []
         for m in all_results:
             if isinstance(m, GappedMotif):
-                row = [_has_ordered_subsequence(names, m.anchors) for names in run_names]
+                row = [_is_subsequence(m.anchors, tuple(names)) for names in run_names]
             else:
                 row = [m.pattern in grams for grams in run_grams]
             rows.append(row)
@@ -298,12 +299,6 @@ def patterns(
             f"  Empirical FDR: [bold]{fdr:.1%}[/bold] "
             f"({mean_null:.1f} mean null discoveries vs {len(all_results)} actual)"
         )
-
-
-def _has_ordered_subsequence(names: list[str], anchors: tuple[str, ...]) -> bool:
-    """Check if anchors appear as an ordered subsequence in names."""
-    it = iter(names)
-    return all(a in it for a in anchors)
 
 
 @app.command()

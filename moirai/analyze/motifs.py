@@ -124,7 +124,7 @@ def find_motifs(
 
     # Apply BH correction
     raw_p = [m.p_value for m in candidates]
-    adjusted = benjamini_hochberg(raw_p, q=q_threshold)
+    adjusted = benjamini_hochberg(raw_p)
     for motif, qv in zip(candidates, adjusted):
         motif.q_value = qv
 
@@ -292,7 +292,7 @@ def find_gapped_motifs(
 
     # Apply BH correction
     raw_p = [m.p_value for m in candidates]
-    adjusted = benjamini_hochberg(raw_p, q=q_threshold)
+    adjusted = benjamini_hochberg(raw_p)
     for motif, qv in zip(candidates, adjusted):
         motif.q_value = qv
 

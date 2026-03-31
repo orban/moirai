@@ -26,7 +26,7 @@ class TestBenjaminiHochberg:
     def test_known_reference(self):
         """Known BH example: 10 p-values at q=0.05, first 2 survive."""
         p_values = [0.001, 0.008, 0.039, 0.041, 0.042, 0.06, 0.074, 0.205, 0.212, 0.216]
-        adjusted = benjamini_hochberg(p_values, q=0.05)
+        adjusted = benjamini_hochberg(p_values)
 
         # First 2 should have q <= 0.05
         assert adjusted[0] is not None and adjusted[0] <= 0.05

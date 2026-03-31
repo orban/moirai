@@ -82,7 +82,7 @@ def find_divergence_points(
 
     # Apply BH correction
     raw_p = [dp.p_value for dp in candidates]
-    adjusted = benjamini_hochberg(raw_p, q=q_threshold)
+    adjusted = benjamini_hochberg(raw_p)
     for dp, qv in zip(candidates, adjusted):
         dp.q_value = qv
 

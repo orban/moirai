@@ -312,7 +312,7 @@ def print_cluster_divergence(
         # Show top 3 divergence points for this cluster
         run_lookup = {r.run_id: r for r in cluster_runs_list}
         for point in points[:3]:
-            p_str = f", p={point.p_value:.3f}" if point.p_value is not None else ""
+            p_str = f", q={point.q_value:.3f}" if getattr(point, "q_value", None) is not None else (f", p={point.p_value:.3f}" if point.p_value is not None else "")
             console.print(f"\n  [bold]Position {point.column}[/bold] (entropy {point.entropy:.2f}{p_str})")
 
             if point.phase_context:
