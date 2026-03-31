@@ -4,16 +4,13 @@ Find where agents actually go wrong.
 
 Given 100+ runs of the same task, moirai aligns trajectories and identifies the exact decision points where behavior diverges — and whether those choices predict success or failure.
 
-```
-                       ┌─ read(config) → read(test_file) ─── success (100%)
-                       │
-run 1─┐                │
-run 2─┼─ read(source) ─┤
-run 3─┤                │
-run 4─┘                └─ bash(python) → bash(python) ───── failure (0%)
-                       │
-                       divergence point (p=0.001)
-```
+![trajectory alignment](docs/images/alignment.png)
+
+Each row is one run of the same task. Steps are aligned across runs using Needleman-Wunsch, colored by category (read, search, edit, test, bash, subagent). Dendrogram on the left clusters similar trajectories; numbered badges mark where behavior splits. Below the heatmap, moirai pairs a passing and failing run and shows exactly where they diverged — including the agent's own reasoning at the decision point.
+
+![divergence comparison](docs/images/divergence_trees.png)
+
+`moirai branch --html report.html` generates these reports. Every task with mixed outcomes gets its own panel.
 
 ## The core idea
 
@@ -107,18 +104,6 @@ Compared to failing runs in this cluster (105):
 ```
 
 This run spent 76% of its steps exploring (reading, searching) before making 3 targeted edits. The 105 failing runs in the same cluster averaged the same length — the difference wasn't effort, it was strategy.
-
-### HTML report
-
-`moirai branch --html report.html` generates a per-task analysis. Each task with mixed outcomes gets aligned trajectories and fork comparisons showing where runs diverged:
-
-**Per-task trajectory alignment** — repeated runs of the same task, aligned by step sequence. Dendrogram on the left clusters similar trajectories; pass/fail markers show outcomes. Each cell is an enriched step (file type, command type, search specificity), colored by category. Numbered badges mark divergence points.
-
-![trajectory alignment](docs/images/alignment.png)
-
-**Pass vs fail comparison at forks** — at each structural split, a side-by-side comparison of what the passing and failing runs actually did. Includes the agent's own reasoning at the decision point and the full trajectory with actual file names and commands inline.
-
-![divergence comparison](docs/images/divergence_trees.png)
 
 ## What you can do with this
 
