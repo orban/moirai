@@ -574,7 +574,7 @@ def _run_llm_analysis(task_id: str, runs: list[Run]) -> str | None:
     try:
         result = subprocess.run(
             ["claude", "-p", prompt],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=300,
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
