@@ -139,11 +139,16 @@ def _render_task_section(
     s += _clustering_interpretation_from_splits(splits, runs)
     s += f'<div class="heatmap-container">{_build_dendrogram_heatmap(alignment, runs, significant, Z, dendro, safe_tid)}</div>'
 
-    if significant:
-        s += '<div class="fork-cards">'
-        for i, split in enumerate(significant, 1):
-            s += _build_split_card(split, number=i, task_id=safe_tid)
-        s += '</div>'
+    # Pairwise run comparisons at split points
+    run_map = {r.run_id: r for r in runs}
+    comparisons_shown = 0
+    for i, split in enumerate(significant, 1):
+        if comparisons_shown >= 3:
+            break
+        comp = _build_run_comparison(split, run_map, number=i, task_id=safe_tid)
+        if comp:
+            s += comp
+            comparisons_shown += 1
 
     s += '</div>'
     return s
@@ -186,6 +191,141 @@ def _clustering_interpretation_from_splits(splits: list, runs: list[Run]) -> str
 # ---------------------------------------------------------------------------
 # Fork cards
 # ---------------------------------------------------------------------------
+
+def _build_run_comparison(split, run_map: dict[str, Run], number: int | None = None, task_id: str = "") -> str | None:
+    """Build a side-by-side comparison of a pass run vs a fail run from a split.
+
+    Picks the best pair: one from each subtree with different outcomes.
+    Shows their full step sequences with the divergence point marked.
+    """
+    # Find a pass/fail pair across the split
+    left_pass = [rid for rid in split.left_runs if run_map.get(rid) and run_map[rid].result.success is True]
+    left_fail = [rid for rid in split.left_runs if run_map.get(rid) and run_map[rid].result.success is False]
+    right_pass = [rid for rid in split.right_runs if run_map.get(rid) and run_map[rid].result.success is True]
+    right_fail = [rid for rid in split.right_runs if run_map.get(rid) and run_map[rid].result.success is False]
+
+    # Best pair: pass from one side, fail from the other
+    pass_run = fail_run = None
+    if left_pass and right_fail:
+        # Prefer runs with reasoning
+        pass_run = _pick_best_run([run_map[rid] for rid in left_pass])
+        fail_run = _pick_best_run([run_map[rid] for rid in right_fail])
+    elif right_pass and left_fail:
+        pass_run = _pick_best_run([run_map[rid] for rid in right_pass])
+        fail_run = _pick_best_run([run_map[rid] for rid in left_fail])
+    elif left_pass and left_fail:
+        pass_run = _pick_best_run([run_map[rid] for rid in left_pass])
+        fail_run = _pick_best_run([run_map[rid] for rid in left_fail])
+    elif right_pass and right_fail:
+        pass_run = _pick_best_run([run_map[rid] for rid in right_pass])
+        fail_run = _pick_best_run([run_map[rid] for rid in right_fail])
+
+    if not pass_run or not fail_run:
+        return None
+
+    col = split.column
+    card_id = f'fork-{task_id}-{number}' if number and task_id else ""
+    hover = f'@mouseenter="highlightCol(\'{task_id}\', {col})" @mouseleave="clearHighlight()"' if task_id else ""
+
+    s = f'<div class="fork-card" id="{card_id}" {hover} style="padding:16px">'
+
+    # Header
+    s += '<div class="fork-card-header">'
+    if number is not None and task_id:
+        s += f'<span class="fork-number" @click="scrollToHeatmap(\'{task_id}\', {number})">{number}</span>'
+    s += '<span class="fork-summary">Pass vs fail comparison at the split point</span>'
+    s += '</div>'
+
+    if split.p_value is not None:
+        s += f'<div class="fork-pvalue">p={split.p_value:.3f} · separation: {split.separation:.0%}</div>'
+
+    # Side-by-side comparison
+    s += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">'
+    s += _render_run_column(pass_run, col, is_pass=True)
+    s += _render_run_column(fail_run, col, is_pass=False)
+    s += '</div>'
+
+    s += '</div>'
+    return s
+
+
+def _pick_best_run(runs: list[Run]) -> Run:
+    """Pick the most informative run — prefer one with reasoning data."""
+    with_reasoning = [r for r in runs if any(s.output.get("reasoning") for s in r.steps if s.output)]
+    if with_reasoning:
+        return with_reasoning[0]
+    return runs[0]
+
+
+def _render_run_column(run: Run, divergence_col: int, is_pass: bool) -> str:
+    """Render one run as a vertical step list with the divergence point marked."""
+    from moirai.compress import step_enriched_name
+
+    tag = "PASS" if is_pass else "FAIL"
+    color = "var(--success)" if is_pass else "var(--failure)"
+    bg = "rgba(63,185,80,0.04)" if is_pass else "rgba(248,81,73,0.04)"
+    border_color = "var(--success)" if is_pass else "var(--failure)"
+
+    s = f'<div style="border:1px solid {border_color};border-radius:6px;overflow:hidden">'
+    s += f'<div style="padding:8px 12px;background:{bg};border-bottom:1px solid var(--border);font-size:11px">'
+    s += f'<span style="color:{color};font-weight:700">{tag}</span> '
+    s += f'<span style="color:var(--text-muted)">{run.run_id}</span>'
+    s += '</div>'
+
+    s += '<div style="padding:8px 0">'
+
+    filtered_idx = 0
+    for step in run.steps:
+        enriched = step_enriched_name(step)
+        if enriched is None:
+            continue
+
+        # Get detail
+        detail = ""
+        if step.attrs:
+            fp = step.attrs.get("file_path", "")
+            if fp:
+                detail = os.path.basename(fp)
+            cmd = step.attrs.get("command", "")
+            if cmd:
+                detail = cmd[:60]
+            pat = step.attrs.get("pattern", "")
+            if pat:
+                detail = pat[:40]
+
+        reasoning = step.output.get("reasoning", "") if step.output else ""
+
+        # Is this near the divergence point?
+        is_divergence = (filtered_idx == divergence_col)
+        step_color = STEP_COLORS.get(enriched, DEFAULT_COLOR)
+
+        if is_divergence:
+            s += f'<div style="padding:4px 12px;background:rgba(210,153,34,0.1);border-left:3px solid var(--accent);margin:2px 0">'
+        else:
+            s += f'<div style="padding:2px 12px;margin:1px 0;border-left:3px solid transparent">'
+
+        # Step name with color indicator
+        s += f'<div style="font-size:11px;display:flex;align-items:center;gap:6px">'
+        s += f'<span style="width:4px;height:4px;border-radius:50%;background:{step_color};flex-shrink:0"></span>'
+        s += f'<span style="color:var(--text-bright)">{enriched}</span>'
+        if detail:
+            s += f' <span style="color:var(--text-muted);font-size:10px">{detail}</span>'
+        s += '</div>'
+
+        # Reasoning (if present)
+        if reasoning:
+            s += f'<div style="font-size:10px;color:var(--text-muted);font-style:italic;margin:2px 0 2px 10px;padding-left:8px;border-left:1px solid var(--border)">'
+            s += f'{reasoning[:150]}'
+            if len(reasoning) > 150:
+                s += '...'
+            s += '</div>'
+
+        s += '</div>'
+        filtered_idx += 1
+
+    s += '</div></div>'
+    return s
+
 
 def _build_split_card(split, number: int | None = None, task_id: str = "") -> str:
     """Render a card for a dendrogram split divergence."""
