@@ -365,103 +365,110 @@
         </span>
       </div>
 
-      <div x-show="task.interpretation" class="interp"
-           :style="`color:var(--${task.interpretation?.level === 'success' ? 'pass' : task.interpretation?.level === 'accent' ? 'accent' : 'text-muted'})`"
-           x-text="task.interpretation?.text"></div>
-
-      <div class="heatmap-wrap" x-data x-init="
-        let src = document.getElementById('svg-' + task.safe_id);
-        if (src) { $el.appendChild(src.firstElementChild.cloneNode(true)); }
-      "></div>
-
-      <!-- LLM Analysis -->
+      <!-- ANALYSIS FIRST (the actionable part) -->
       <template x-if="task.analysis">
-        <div style="padding:16px 24px;border-top:1px solid var(--border-subtle)">
-          <div style="font-size:9px;font-weight:500;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent);margin-bottom:10px">Analysis</div>
-          <div style="font-family:var(--display);font-size:13px;font-weight:400;color:var(--text-bright);line-height:1.7;white-space:pre-wrap" x-text="task.analysis"></div>
+        <div style="padding:20px 24px;border-bottom:1px solid var(--border-subtle)">
+          <div style="font-family:var(--display);font-size:14px;font-weight:400;color:var(--text-bright);line-height:1.65;margin-bottom:16px"
+               x-text="task.analysis.finding"></div>
+
+          <div x-show="task.analysis.recommendation" style="background:var(--accent-dim);border:1px solid rgba(224,165,38,0.2);border-radius:6px;padding:12px 16px;margin-bottom:12px">
+            <div style="font-size:9px;font-weight:500;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent);margin-bottom:6px">Recommendation</div>
+            <div style="font-family:var(--display);font-size:13px;color:var(--text-bright);line-height:1.55"
+                 x-text="task.analysis.recommendation"></div>
+          </div>
+
+          <div style="display:flex;gap:8px;align-items:center">
+            <span style="font-size:10px;color:var(--text-muted)">Confidence:</span>
+            <span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:3px"
+                  :style="`background:${task.analysis.confidence === 'high' ? 'var(--pass-dim)' : task.analysis.confidence === 'medium' ? 'var(--accent-dim)' : 'var(--fail-dim)'};color:${task.analysis.confidence === 'high' ? 'var(--pass)' : task.analysis.confidence === 'medium' ? 'var(--accent)' : 'var(--fail)'}`"
+                  x-text="task.analysis.confidence"></span>
+            <span style="font-size:10px;color:var(--text-muted)" x-text="task.analysis.confidence_reason"></span>
+          </div>
         </div>
       </template>
 
-      <div x-show="task.comparisons.length" class="comps">
-        <template x-for="comp in task.comparisons" :key="comp.number">
-          <div class="comp" :id="`fork-${comp.task_id}-${comp.number}`"
-               @mouseenter="highlightCol(comp.task_id, comp.column)"
-               @mouseleave="clearHighlight()">
+      <!-- NO ANALYSIS: show CTA -->
+      <template x-if="!task.analysis && task.comparisons.length">
+        <div style="padding:16px 24px;border-bottom:1px solid var(--border-subtle);background:var(--accent-dim)">
+          <div style="font-size:11px;color:var(--accent);font-weight:500;margin-bottom:4px">Run with --analyze to get LLM analysis</div>
+          <code style="font-size:10px;color:var(--text);background:var(--bg);padding:4px 8px;border-radius:3px;display:inline-block">moirai branch --analyze --html report.html</code>
+        </div>
+      </template>
 
-            <div class="comp-top">
-              <span class="comp-badge"
-                    @click="scrollToHeatmap(comp.task_id, comp.number)"
-                    x-text="comp.number"></span>
-              <div class="comp-narrative" x-show="comp.narrative">
-                After <strong x-text="comp.narrative?.n_same"></strong> identical
-                step<span x-show="comp.narrative?.n_same !== 1">s</span>, these runs diverge:
-                the pass run chose <code x-text="comp.narrative?.pass_action"></code>
-                while the fail run chose <code x-text="comp.narrative?.fail_action"></code>.
+      <!-- EVIDENCE (expandable) -->
+      <details style="border-top:1px solid var(--border-subtle)">
+        <summary style="padding:10px 24px;font-size:10px;color:var(--text-muted);cursor:pointer;user-select:none">
+          Evidence: dendrogram, trajectory comparisons, reasoning
+        </summary>
+
+        <div x-show="task.interpretation" class="interp"
+             :style="`color:var(--${task.interpretation?.level === 'success' ? 'pass' : task.interpretation?.level === 'accent' ? 'accent' : 'text-muted'})`"
+             x-text="task.interpretation?.text"></div>
+
+        <div class="heatmap-wrap" x-data x-init="
+          let src = document.getElementById('svg-' + task.safe_id);
+          if (src && src.firstElementChild) { $el.appendChild(src.firstElementChild.cloneNode(true)); }
+        "></div>
+
+        <div x-show="task.comparisons.length" class="comps">
+          <template x-for="comp in task.comparisons" :key="comp.number">
+            <div class="comp" :id="`fork-${comp.task_id}-${comp.number}`">
+
+              <div class="comp-top">
+                <span class="comp-badge" x-text="comp.number"></span>
+                <div class="comp-narrative" x-show="comp.narrative">
+                  After <strong x-text="comp.narrative?.n_same"></strong> identical
+                  step<span x-show="comp.narrative?.n_same !== 1">s</span>, these runs diverge:
+                  the pass run chose <code x-text="comp.narrative?.pass_action"></code>
+                  while the fail run chose <code x-text="comp.narrative?.fail_action"></code>.
+                </div>
               </div>
-            </div>
 
-            <div class="comp-meta" x-show="comp.p_value || comp.separation">
-              <span x-show="comp.p_value" x-text="`p=${comp.p_value}`"></span>
-              <span x-show="comp.p_value && comp.separation"> · </span>
-              <span x-text="`separation ${comp.separation}`"></span>
-            </div>
-
-            <!-- Reasoning -->
-            <div x-show="comp.pass_reasoning || comp.fail_reasoning" class="reasoning-grid">
-              <div class="reasoning-cell pass-cell">
-                <div class="reasoning-tag" style="color:var(--pass)">Pass reasoning</div>
-                <div class="reasoning-text" x-text="comp.pass_reasoning ? comp.pass_reasoning.substring(0, 350) : 'No reasoning captured'"></div>
+              <div x-show="comp.pass_reasoning || comp.fail_reasoning" class="reasoning-grid">
+                <div class="reasoning-cell pass-cell">
+                  <div class="reasoning-tag" style="color:var(--pass)">Pass reasoning</div>
+                  <div class="reasoning-text" x-text="comp.pass_reasoning ? comp.pass_reasoning.substring(0, 350) : 'No reasoning captured'"></div>
+                </div>
+                <div class="reasoning-cell fail-cell">
+                  <div class="reasoning-tag" style="color:var(--fail)">Fail reasoning</div>
+                  <div class="reasoning-text" x-text="comp.fail_reasoning ? comp.fail_reasoning.substring(0, 350) : 'No reasoning captured'"></div>
+                </div>
               </div>
-              <div class="reasoning-cell fail-cell">
-                <div class="reasoning-tag" style="color:var(--fail)">Fail reasoning</div>
-                <div class="reasoning-text" x-text="comp.fail_reasoning ? comp.fail_reasoning.substring(0, 350) : 'No reasoning captured'"></div>
-              </div>
-            </div>
 
-            <!-- LLM Analysis (if available) or CTA -->
-            <template x-if="!task.analysis">
-              <div style="padding:12px 20px;border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle);background:var(--accent-dim)">
-                <div style="font-size:11px;color:var(--accent);font-weight:500;margin-bottom:4px">Get LLM analysis of this divergence</div>
-                <code style="font-size:10px;color:var(--text);background:var(--bg);padding:4px 8px;border-radius:3px;display:inline-block"
-                  >moirai branch --analyze --html report.html <span x-text="'--task ' + task.id" style="color:var(--accent)"></span></code>
-              </div>
-            </template>
-
-            <!-- Aligned diff -->
-            <div class="diff-wrap">
-              <table class="diff">
-                <tr>
-                  <th style="width:50%"><span style="color:var(--pass)">PASS</span> <span x-text="comp.pass_run_id" style="font-weight:300"></span></th>
-                  <th style="width:50%"><span style="color:var(--fail)">FAIL</span> <span x-text="comp.fail_run_id" style="font-weight:300"></span></th>
-                </tr>
-                <template x-for="(row, idx) in comp.rows" :key="idx">
-                  <tr :class="row.first_div ? 'row-first' : (row.match ? 'row-match' : 'row-diff')">
-                    <td>
-                      <template x-if="row.pass.gap"><span class="gap">&mdash;</span></template>
-                      <template x-if="!row.pass.gap">
-                        <span>
-                          <span class="step-name" :style="`color:${row.pass.color || 'inherit'}`" x-text="row.pass.value"></span>
-                          <span x-show="row.pass.detail" class="file-detail" x-text="row.pass.detail"></span>
-                        </span>
-                      </template>
-                    </td>
-                    <td>
-                      <template x-if="row.fail.gap"><span class="gap">&mdash;</span></template>
-                      <template x-if="!row.fail.gap">
-                        <span>
-                          <span class="step-name" :style="`color:${row.fail.color || 'inherit'}`" x-text="row.fail.value"></span>
-                          <span x-show="row.fail.detail" class="file-detail" x-text="row.fail.detail"></span>
-                        </span>
-                      </template>
-                    </td>
+              <div class="diff-wrap">
+                <table class="diff">
+                  <tr>
+                    <th style="width:50%"><span style="color:var(--pass)">PASS</span> <span x-text="comp.pass_run_id" style="font-weight:300"></span></th>
+                    <th style="width:50%"><span style="color:var(--fail)">FAIL</span> <span x-text="comp.fail_run_id" style="font-weight:300"></span></th>
                   </tr>
-                </template>
-              </table>
+                  <template x-for="(row, idx) in comp.rows" :key="idx">
+                    <tr :class="row.first_div ? 'row-first' : (row.match ? 'row-match' : 'row-diff')">
+                      <td>
+                        <template x-if="row.pass.gap"><span class="gap">&mdash;</span></template>
+                        <template x-if="!row.pass.gap">
+                          <span>
+                            <span class="step-name" :style="`color:${row.pass.color || 'inherit'}`" x-text="row.pass.value"></span>
+                            <span x-show="row.pass.detail" class="file-detail" x-text="row.pass.detail"></span>
+                          </span>
+                        </template>
+                      </td>
+                      <td>
+                        <template x-if="row.fail.gap"><span class="gap">&mdash;</span></template>
+                        <template x-if="!row.fail.gap">
+                          <span>
+                            <span class="step-name" :style="`color:${row.fail.color || 'inherit'}`" x-text="row.fail.value"></span>
+                            <span x-show="row.fail.detail" class="file-detail" x-text="row.fail.detail"></span>
+                          </span>
+                        </template>
+                      </td>
+                    </tr>
+                  </template>
+                </table>
+              </div>
             </div>
-
-          </div>
-        </template>
-      </div>
+          </template>
+        </div>
+      </details>
     </div>
   </template>
 

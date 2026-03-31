@@ -181,13 +181,19 @@ def explain_task(task_id: str, runs: list[Run]) -> str:
                 lines.append(f"```\n{s['result'][:1000]}\n```")
             lines.append("")
 
-    # Prompt for analysis
-    lines.append("## Analysis prompt")
+    # Prompt for structured analysis
+    lines.append("## Analysis instructions")
     lines.append("")
-    lines.append("Given the above divergence between a passing and failing run of the same task:")
-    lines.append("1. Why did the pass run's approach work while the fail run's didn't?")
-    lines.append("2. What specific knowledge or decision at the divergence point made the difference?")
-    lines.append("3. What system prompt change or tool configuration would steer agents toward the successful approach?")
+    lines.append("Respond with EXACTLY this JSON structure (no markdown, no explanation outside the JSON):")
+    lines.append("")
+    lines.append('```json')
+    lines.append('{')
+    lines.append('  "finding": "One paragraph: what behavioral difference between the pass and fail run caused the different outcome? If both runs appear correct, say so and identify the likely eval harness issue.",')
+    lines.append('  "recommendation": "One specific, concrete action: a system prompt addition, tool restriction, or workflow change. Give the exact text to add if it\'s a prompt change. If no agent change is needed, say what the eval harness should change.",')
+    lines.append('  "confidence": "high | medium | low",')
+    lines.append('  "confidence_reason": "One sentence explaining the confidence level."')
+    lines.append('}')
+    lines.append('```')
 
     return "\n".join(lines)
 

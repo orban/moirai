@@ -554,8 +554,9 @@ def _build_dendrogram_heatmap_svg(
 # Patterns data
 # ---------------------------------------------------------------------------
 
-def _run_llm_analysis(task_id: str, runs: list[Run]) -> str | None:
-    """Run LLM analysis via claude CLI (Claude Code)."""
+def _run_llm_analysis(task_id: str, runs: list[Run]) -> dict | None:
+    """Run LLM analysis via claude CLI. Returns structured dict or None."""
+    import re
     import shutil
     import subprocess
     import sys
@@ -576,11 +577,24 @@ def _run_llm_analysis(task_id: str, runs: list[Run]) -> str | None:
             ["claude", "-p", prompt],
             capture_output=True, text=True, timeout=300,
         )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-        if result.stderr:
-            print(f"  warning: {result.stderr[:200]}", file=sys.stderr)
-        return None
+        if result.returncode != 0 or not result.stdout.strip():
+            if result.stderr:
+                print(f"  warning: {result.stderr[:200]}", file=sys.stderr)
+            return None
+
+        raw = result.stdout.strip()
+
+        # Try to parse structured JSON from the response
+        json_match = re.search(r'\{[^{}]*"finding"[^{}]*\}', raw, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group())
+            except json.JSONDecodeError:
+                pass
+
+        # Fallback: return as unstructured text
+        return {"finding": raw[:500], "recommendation": "", "confidence": "low", "confidence_reason": "Unstructured response"}
+
     except subprocess.TimeoutExpired:
         print(f"  warning: analysis timed out for {task_id}", file=sys.stderr)
         return None
