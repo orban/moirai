@@ -40,35 +40,35 @@ Replace narrative findings + decision trees + flat heatmap with fork cards and d
 
 **File:** `moirai/analyze/narrate.py`
 
-- [ ] Add `reasoning: str | None = None` to `StepDetail` and `BranchExample`
-- [ ] In `_build_branches()`, populate reasoning from the representative run's fork step `output.get("reasoning")`
+- [x] Add `reasoning: str | None = None` to `StepDetail` and `BranchExample`
+- [x] In `_build_branches()`, populate reasoning from the representative run's fork step `output.get("reasoning")`
 
 ### HTML overhaul
 
 **File:** `moirai/viz/html.py`
 
 **Fork cards (replacing narrative + decision tree):**
-- [ ] Remove `_build_divergence_tree()`, `_get_context_str()`, tree CSS classes
-- [ ] Replace per-task narrative rendering with fork cards: header (summary + p-value), per-branch windowed trajectory (slice around `fork_position`, clamped), reasoning excerpt when available, run ID
-- [ ] Drop `recommendation` from fork card display
+- [x] Remove `_build_divergence_tree()`, `_get_context_str()`, tree CSS classes
+- [x] Replace per-task narrative rendering with fork cards: header (summary + p-value), per-branch windowed trajectory (slice around `fork_position`, clamped), reasoning excerpt when available, run ID
+- [x] Drop `recommendation` from fork card display
 
 **Dendrogram+heatmap (replacing flat matrix):**
-- [ ] Add `_scipy_coords_to_svg()` — map scipy dendrogram coordinates to SVG paths. Guard zero max distance.
-- [ ] Add `_build_dendrogram_heatmap(alignment, runs, points)` — compute `distance_matrix(runs, level="name")`, run `linkage` + `dendrogram(no_plot=True)`, render dendrogram + outcome strip + reordered heatmap + divergence tick marks as single SVG. Import scipy lazily inside the function. 1 run: skip dendrogram.
-- [ ] Remove `_build_trajectory_matrix()`
+- [x] Add `_scipy_coords_to_svg()` — map scipy dendrogram coordinates to SVG paths. Guard zero max distance.
+- [x] Add `_build_dendrogram_heatmap(alignment, runs, points)` — compute `distance_matrix(runs, level="name")`, run `linkage` + `dendrogram(no_plot=True)`, render dendrogram + outcome strip + reordered heatmap + divergence tick marks as single SVG. Import scipy lazily inside the function. 1 run: skip dendrogram.
+- [x] Remove `_build_trajectory_matrix()`
 
 ### Tests
 
 **File:** `tests/test_narrate.py` (new)
 
-- [ ] `narrate_task` with reasoning present — verify `BranchExample.reasoning` populated
-- [ ] `narrate_task` without reasoning — verify graceful degradation (None, no crash)
+- [x] `narrate_task` with reasoning present — verify `BranchExample.reasoning` populated
+- [x] `narrate_task` without reasoning — verify graceful degradation (None, no crash)
 
 **File:** `tests/test_html.py` (new)
 
-- [ ] `_build_dendrogram_heatmap` with 3+ runs — SVG contains dendrogram paths, outcome strip, heatmap
-- [ ] `_build_dendrogram_heatmap` with 1 run — no crash, no dendrogram paths
-- [ ] Identical trajectories (zero distances) — no division-by-zero crash
+- [x] `_build_dendrogram_heatmap` with 3+ runs — SVG contains dendrogram paths, outcome strip, heatmap
+- [x] `_build_dendrogram_heatmap` with 1 run — no crash, no dendrogram paths
+- [x] Identical trajectories (zero distances) — no division-by-zero crash
 
 **Commit:** `feat: fork cards + dendrogram heatmap`
 
@@ -76,7 +76,7 @@ Replace narrative findings + decision trees + flat heatmap with fork cards and d
 
 ## Acceptance criteria
 
-- [ ] `moirai branch runs/ --html report.html` produces fork cards with reasoning excerpts (when available)
-- [ ] Fork cards degrade gracefully without reasoning (attrs context only)
-- [ ] Alignment matrix shows dendrogram on left, outcome strip, rows ordered by behavioral similarity
-- [ ] Decision trees fully removed from HTML output
+- [x] `moirai branch runs/ --html report.html` produces fork cards with reasoning excerpts (when available)
+- [x] Fork cards degrade gracefully without reasoning (attrs context only)
+- [x] Alignment matrix shows dendrogram on left, outcome strip, rows ordered by behavioral similarity
+- [x] Decision trees fully removed from HTML output

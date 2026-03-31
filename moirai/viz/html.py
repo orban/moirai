@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
-from moirai.compress import compress_phases
+from moirai.compress import compress_phases, NOISE_STEPS
 from moirai.schema import (
     Alignment,
     ClusterResult,
@@ -31,6 +30,7 @@ STEP_COLORS: dict[str, str] = {
 }
 
 DEFAULT_COLOR = "#bab0ac"
+TYPE_COLORS = {"tool": "#4e79a7", "llm": "#b07aa1", "system": "#9c755f", "judge": "#59a14f", "error": "#e15759"}
 
 
 def write_branch_html(
@@ -40,7 +40,7 @@ def write_branch_html(
     path: Path,
     task_results: list | None = None,
 ) -> Path:
-    """Write branch analysis dashboard with per-task trajectory matrices and divergence trees."""
+    """Write branch analysis dashboard with fork cards and dendrogram+heatmap."""
     path = Path(path)
 
     if not runs:
@@ -64,62 +64,19 @@ def write_branch_html(
 
             section = f'<div class="panel" style="margin-bottom:24px">'
             section += f'<h2 style="margin-bottom:2px">{tid}</h2>'
-            section += f'<div style="font-size:12px;color:#888;margin-bottom:12px">{len(task_runs)} runs ({n_pass} pass, {n_fail} fail), {n_cols} aligned positions</div>'
+            section += f'<div style="font-size:12px;color:#888;margin-bottom:12px">{len(task_runs)} runs ({n_pass}P/{n_fail}F), {n_cols} aligned positions</div>'
 
-            # Narrative findings first
+            # Fork cards
             if findings:
                 for finding in findings:
-                    section += f'<div style="border-left:3px solid #4e79a7;padding:8px 14px;margin:10px 0;background:#f8fafc">'
-                    section += f'<div style="font-size:14px;font-weight:600;color:#222;margin-bottom:4px">{finding.summary}</div>'
-                    section += f'<div style="font-size:12px;color:#666;margin-bottom:8px">{finding.recommendation}</div>'
-
-                    # Show the branch trajectories side by side
-                    for branch in finding.branches:
-                        rate = branch.success_rate
-                        if rate is not None and rate >= 0.6:
-                            tag_color = "#2d7d2d"
-                            tag_bg = "#e8f5e9"
-                        elif rate is not None and rate <= 0.2:
-                            tag_color = "#c0392b"
-                            tag_bg = "#fce4ec"
-                        else:
-                            tag_color = "#b07800"
-                            tag_bg = "#fff8e1"
-
-                        rate_str = f"{rate:.0%}" if rate is not None else "?"
-                        section += f'<div style="margin:8px 0;padding:6px 10px;background:{tag_bg};border-radius:4px;font-size:12px">'
-                        section += f'<span style="font-weight:700;color:{tag_color}">{rate_str} success</span>'
-                        section += f' — {branch.run_count} runs chose <code>{branch.value}</code>'
-
-                        # Show trajectory steps
-                        step_parts = []
-                        for s in branch.steps:
-                            if s.is_fork:
-                                label = f'<strong style="background:{tag_color};color:white;padding:1px 4px;border-radius:2px">{s.enriched_name}</strong>'
-                            else:
-                                label = f'<span style="color:#666">{s.enriched_name}</span>'
-                            if s.detail:
-                                label += f'<span style="color:#bbb;font-size:10px"> {s.detail}</span>'
-                            step_parts.append(label)
-
-                        section += f'<div style="font-family:SF Mono,Menlo,monospace;font-size:11px;margin-top:4px;line-height:1.8">'
-                        section += ' → '.join(step_parts)
-                        section += '</div></div>'
-
-                    section += '</div>'
+                    section += _build_fork_card(finding)
             else:
                 section += '<div style="color:#888;font-size:13px">No significant divergence points in this task.</div>'
 
-            # Matrix as supporting evidence
+            # Dendrogram + heatmap as supporting evidence
             section += f'<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:#888">Show aligned trajectories</summary>'
-            section += f'<div style="margin-top:8px">{_build_trajectory_matrix(task_alignment, task_runs)}</div>'
+            section += f'<div style="margin-top:8px">{_build_dendrogram_heatmap(task_alignment, task_runs, task_points)}</div>'
             section += '</details>'
-
-            # Tree as supporting evidence
-            if task_points:
-                section += f'<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;color:#888">Show decision trees</summary>'
-                section += f'<div style="margin-top:8px">{_build_divergence_tree(task_points, task_alignment, task_runs)}</div>'
-                section += '</details>'
 
             section += '</div>'
             task_sections.append(section)
@@ -144,12 +101,6 @@ def write_branch_html(
   .stat-value {{ font-size: 24px; font-weight: 700; }}
   .stat-label {{ font-size: 11px; color: #999; text-transform: uppercase; letter-spacing: 0.5px; }}
   .panel {{ background: white; border-radius: 6px; padding: 20px; margin: 16px 0; border: 1px solid #e5e5e5; }}
-  .legend {{ margin-bottom: 12px; }}
-  .tree-node {{ border: 1px solid #ddd; border-radius: 6px; padding: 10px 14px; margin: 6px 0; display: inline-block; }}
-  .tree-branch {{ margin-left: 24px; border-left: 2px solid #ddd; padding-left: 16px; }}
-  .tree-label {{ font-family: 'SF Mono', Menlo, monospace; font-size: 13px; font-weight: 600; }}
-  .tree-stats {{ font-size: 12px; color: #666; }}
-  .tree-context {{ font-family: 'SF Mono', Menlo, monospace; font-size: 11px; color: #999; margin-top: 2px; }}
   .success {{ color: #2d7d2d; }}
   .failure {{ color: #c0392b; }}
   .mixed {{ color: #b07800; }}
@@ -180,29 +131,143 @@ def write_branch_html(
     return path
 
 
-TYPE_COLORS = {"tool": "#4e79a7", "llm": "#b07aa1", "system": "#9c755f", "judge": "#59a14f", "error": "#e15759"}
+# --- Fork cards ---
+
+def _build_fork_card(finding) -> str:
+    """Render a fork card for one divergence point."""
+    p_str = f"p={finding.p_value:.3f}" if finding.p_value is not None else ""
+
+    card = f'<div style="border-left:3px solid #4e79a7;padding:8px 14px;margin:10px 0;background:#f8fafc">'
+    card += f'<div style="font-size:14px;font-weight:600;color:#222;margin-bottom:4px">{finding.summary}</div>'
+    if p_str:
+        card += f'<div style="font-size:11px;color:#aaa;margin-bottom:8px">{p_str}</div>'
+
+    for branch in finding.branches:
+        rate = branch.success_rate
+        if rate is not None and rate >= 0.6:
+            tag_color = "#2d7d2d"
+            tag_bg = "#e8f5e9"
+        elif rate is not None and rate <= 0.2:
+            tag_color = "#c0392b"
+            tag_bg = "#fce4ec"
+        else:
+            tag_color = "#b07800"
+            tag_bg = "#fff8e1"
+
+        rate_str = f"{rate:.0%}" if rate is not None else "?"
+        card += f'<div style="margin:8px 0;padding:6px 10px;background:{tag_bg};border-radius:4px;font-size:12px">'
+        card += f'<span style="font-weight:700;color:{tag_color}">{rate_str} success</span>'
+        card += f' — {branch.run_count} runs chose <code>{branch.value}</code>'
+
+        # Windowed trajectory around the fork
+        fp = branch.fork_position
+        window_start = max(0, fp - 4)
+        window_end = min(len(branch.steps), fp + 5)
+        windowed = branch.steps[window_start:window_end]
+
+        step_parts = []
+        for s in windowed:
+            if s.is_fork:
+                label = f'<strong style="background:{tag_color};color:white;padding:1px 4px;border-radius:2px">{s.enriched_name}</strong>'
+            else:
+                label = f'<span style="color:#666">{s.enriched_name}</span>'
+            if s.detail:
+                label += f'<span style="color:#bbb;font-size:10px"> {s.detail}</span>'
+            step_parts.append(label)
+
+        if window_start > 0:
+            step_parts.insert(0, '<span style="color:#ccc">...</span>')
+        if window_end < len(branch.steps):
+            step_parts.append('<span style="color:#ccc">...</span>')
+
+        card += f'<div style="font-family:SF Mono,Menlo,monospace;font-size:11px;margin-top:4px;line-height:1.8">'
+        card += ' → '.join(step_parts)
+        card += '</div>'
+
+        # Reasoning excerpt
+        if branch.reasoning:
+            card += f'<div style="font-style:italic;color:#555;font-size:11px;margin-top:4px;padding:4px 8px;background:rgba(0,0,0,0.03);border-radius:3px">'
+            card += f'"{branch.reasoning[:200]}"'
+            card += '</div>'
+
+        # Run ID
+        card += f'<div style="font-size:10px;color:#bbb;margin-top:2px">Run: {branch.representative_run_id}</div>'
+        card += '</div>'
+
+    card += '</div>'
+    return card
 
 
-def _build_trajectory_matrix(alignment: Alignment, runs: list[Run]) -> str:
-    """Build an SVG trajectory alignment matrix.
+# --- Dendrogram + heatmap ---
 
-    Each row = one run. Each column = one aligned position.
-    Cells colored by enriched step name. Tooltips show attrs detail.
-    Sorted by pass first, then by gap count.
+def _scipy_coords_to_svg(
+    icoord: list[list[float]],
+    dcoord: list[list[float]],
+    cell_h: float,
+    dendro_w: float,
+) -> list[str]:
+    """Map scipy dendrogram coordinates to SVG path elements.
+
+    scipy dendrogram(no_plot=True) returns icoord/dcoord as lists of 4-element
+    lists representing U-shaped brackets. Default leaf spacing: 5, 15, 25...
+    """
+    if not icoord:
+        return []
+
+    # Find max merge distance for x-scaling
+    max_d = max(max(d) for d in dcoord) if dcoord else 1.0
+    if max_d == 0:
+        max_d = 1.0  # all identical trajectories
+
+    paths = []
+    for ic, dc in zip(icoord, dcoord):
+        # ic = [y1, y1, y2, y2] (the U-bracket y positions)
+        # dc = [x1, x2, x2, x1] wait no — scipy uses:
+        # icoord = y-axis (leaf positions), dcoord = x-axis (merge distance)
+        # Each bracket: 4 points forming a U shape
+        # (ic[0],dc[0]) -> (ic[1],dc[1]) -> (ic[2],dc[2]) -> (ic[3],dc[3])
+        # which is: go up from left child, across at merge height, down to right child
+
+        svg_points = []
+        for y_sc, x_sc in zip(ic, dc):
+            # Map y: scipy leaf positions are 5, 15, 25... (spacing=10, offset=5)
+            svg_y = (y_sc - 5) / 10 * cell_h + cell_h / 2
+            # Map x: 0 (leaves) on right, max distance on left
+            svg_x = dendro_w * (1 - x_sc / max_d)
+            svg_points.append((svg_x, svg_y))
+
+        # Draw as polyline: down, across, up
+        d = (f"M {svg_points[0][0]:.1f},{svg_points[0][1]:.1f} "
+             f"L {svg_points[1][0]:.1f},{svg_points[1][1]:.1f} "
+             f"L {svg_points[2][0]:.1f},{svg_points[2][1]:.1f} "
+             f"L {svg_points[3][0]:.1f},{svg_points[3][1]:.1f}")
+        paths.append(f'<path d="{d}" fill="none" stroke="#666" stroke-width="1"/>')
+
+    return paths
+
+
+def _build_dendrogram_heatmap(
+    alignment: Alignment,
+    runs: list[Run],
+    points: list[DivergencePoint],
+) -> str:
+    """Build dendrogram + heatmap SVG.
+
+    Dendrogram on left (hierarchical clustering), outcome strip, run labels,
+    heatmap on right. Rows ordered by dendrogram leaf order.
     """
     if not alignment.matrix or not alignment.matrix[0]:
         return "<p>No alignment data.</p>"
 
+    n_runs = len(alignment.run_ids)
+    n_cols = len(alignment.matrix[0])
     success_map = {r.run_id: r.result.success for r in runs}
 
-    # Build step detail lookup: (run_id, step_name_at_position) -> attrs detail
-    # We match alignment values back to the original steps by position
-    step_details: dict[str, list[str]] = {}  # run_id -> list of detail strings per original step
+    # Build step detail lookup
+    step_details: dict[str, list[str]] = {}
     for run in runs:
-        import os
         details = []
         for s in run.steps:
-            from moirai.compress import step_enriched_name, NOISE_STEPS
             if s.name in NOISE_STEPS:
                 continue
             detail = ""
@@ -219,42 +284,82 @@ def _build_trajectory_matrix(alignment: Alignment, runs: list[Run]) -> str:
             details.append(detail)
         step_details[run.run_id] = details
 
-    n_runs = len(alignment.run_ids)
-    n_cols = len(alignment.matrix[0])
+    # Compute dendrogram ordering (need 2+ runs)
+    dendro_paths: list[str] = []
+    leaf_order: list[int] = list(range(n_runs))
+    dendro_w = 0
 
-    # Sort: pass first, then by gap count (densest first)
-    indices = list(range(n_runs))
-    indices.sort(key=lambda i: (
-        not (success_map.get(alignment.run_ids[i]) is True),
-        sum(1 for v in alignment.matrix[i] if v == GAP),
-    ))
+    if n_runs >= 2:
+        from moirai.analyze.align import distance_matrix
+        from scipy.cluster.hierarchy import linkage, dendrogram as scipy_dendrogram
 
+        level = alignment.level if alignment.level == "name" else "name"
+        condensed = distance_matrix(runs, level=level)
+
+        if len(condensed) > 0:
+            Z = linkage(condensed, method="average")
+            result = scipy_dendrogram(Z, no_plot=True)
+            leaf_order = list(result["leaves"])
+
+            cell_h = max(6, min(14, 400 // max(n_runs, 1)))
+            dendro_w = 100
+            dendro_paths = _scipy_coords_to_svg(
+                result["icoord"], result["dcoord"],
+                cell_h, dendro_w,
+            )
+
+    # Layout dimensions
     cell_w = max(8, min(16, 800 // max(n_cols, 1)))
     cell_h = max(6, min(14, 400 // max(n_runs, 1)))
-    label_w = 180
-    svg_w = label_w + n_cols * cell_w + 10
-    svg_h = n_runs * cell_h + 4
+    outcome_w = 10
+    label_w = 160
+    gap = 4
+    heatmap_x = dendro_w + gap + outcome_w + gap + label_w
+    svg_w = heatmap_x + n_cols * cell_w + 10
+    svg_h = n_runs * cell_h + 20  # extra for tick marks
 
     parts = [f'<svg width="{svg_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg" '
              f'style="font-family:SF Mono,Menlo,monospace;font-size:9px">']
 
-    for row_idx, orig_idx in enumerate(indices):
+    # Dendrogram paths
+    if dendro_paths:
+        parts.append(f'<g class="dendrogram">')
+        parts.extend(dendro_paths)
+        parts.append('</g>')
+
+    # Divergence tick marks on column header
+    div_columns = {p.column for p in points}
+    for col in div_columns:
+        if col < n_cols:
+            x = heatmap_x + col * cell_w + cell_w // 2
+            parts.append(f'<line x1="{x}" y1="0" x2="{x}" y2="{svg_h}" stroke="#e15759" stroke-width="0.5" opacity="0.3"/>')
+
+    # Rows in dendrogram leaf order
+    for row_idx, orig_idx in enumerate(leaf_order):
         rid = alignment.run_ids[orig_idx]
         y = row_idx * cell_h
+
+        # Outcome strip
         s = success_map.get(rid)
+        outcome_color = "#2d7d2d" if s is True else ("#c0392b" if s is False else "#ccc")
+        ox = dendro_w + gap
+        parts.append(f'<rect x="{ox}" y="{y}" width="{outcome_w}" height="{cell_h - 1}" fill="{outcome_color}" rx="1"/>')
+
+        # Run label
         tag = "P" if s is True else ("F" if s is False else "?")
         tag_color = "#2d7d2d" if s else "#c0392b"
+        short_id = rid[:20] + ".." if len(rid) > 22 else rid
+        lx = dendro_w + gap + outcome_w + gap
+        parts.append(f'<text x="{lx}" y="{y + cell_h - 2}" fill="#888" font-size="8">{short_id}</text>')
+        parts.append(f'<text x="{heatmap_x - 4}" y="{y + cell_h - 2}" text-anchor="end" fill="{tag_color}" font-size="9" font-weight="bold">{tag}</text>')
 
-        short_id = rid[:22] + ".." if len(rid) > 24 else rid
-        parts.append(f'<text x="{label_w - 20}" y="{y + cell_h - 2}" text-anchor="end" fill="#888" font-size="8">{short_id}</text>')
-        parts.append(f'<text x="{label_w - 6}" y="{y + cell_h - 2}" text-anchor="end" fill="{tag_color}" font-size="9" font-weight="bold">{tag}</text>')
-
+        # Heatmap cells
         row = alignment.matrix[orig_idx]
         details = step_details.get(rid, [])
         non_gap_idx = 0
         for col in range(n_cols):
             val = row[col] if col < len(row) else GAP
-            x = label_w + col * cell_w
+            x = heatmap_x + col * cell_w
 
             if val == GAP:
                 parts.append(f'<rect x="{x}" y="{y}" width="{cell_w}" height="{cell_h}" fill="#f0f0f0"/>')
@@ -264,7 +369,9 @@ def _build_trajectory_matrix(alignment: Alignment, runs: list[Run]) -> str:
                 tooltip = f"{val}"
                 if detail:
                     tooltip += f" — {detail}"
-                parts.append(f'<rect x="{x}" y="{y}" width="{cell_w - 1}" height="{cell_h - 1}" fill="{color}" rx="1">'
+                is_div = col in div_columns
+                stroke = ' stroke="#e15759" stroke-width="1"' if is_div else ""
+                parts.append(f'<rect x="{x}" y="{y}" width="{cell_w - 1}" height="{cell_h - 1}" fill="{color}" rx="1"{stroke}>'
                              f'<title>{tooltip}</title></rect>')
                 non_gap_idx += 1
 
@@ -272,173 +379,7 @@ def _build_trajectory_matrix(alignment: Alignment, runs: list[Run]) -> str:
     return '\n'.join(parts)
 
 
-def _build_divergence_tree(
-    points: list[DivergencePoint],
-    alignment: Alignment,
-    runs: list[Run],
-) -> str:
-    """Build SVG decision trees for divergence points."""
-    if not points:
-        return "<p>No significant divergence points found.</p>"
-
-    total_all = len(runs)
-    html = ""
-
-    for point in points[:4]:
-        p_str = f"p={point.p_value:.3f}" if point.p_value is not None else ""
-
-        sorted_branches = sorted(
-            point.value_counts.items(),
-            key=lambda x: -(point.success_by_value.get(x[0]) or 0)
-        )
-        n_branches = len(sorted_branches)
-        total_at_point = sum(point.value_counts.values())
-
-        # SVG dimensions
-        node_w, node_h = 160, 56
-        leaf_w, leaf_h = 150, 64
-        h_gap = 20
-        tree_w = n_branches * (leaf_w + h_gap) - h_gap
-        tree_h = 200
-        cx = tree_w // 2 + 40  # center of root node
-        root_x = cx - node_w // 2
-        root_y = 10
-
-        svg_w = max(tree_w + 80, node_w + 80)
-        svg_h = tree_h
-
-        svg = [f'<svg width="{svg_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg" '
-               f'style="font-family:-apple-system,BlinkMacSystemFont,sans-serif">']
-
-        # Root node
-        svg.append(f'<rect x="{root_x}" y="{root_y}" width="{node_w}" height="{node_h}" '
-                   f'rx="6" fill="#f8f8f8" stroke="#ccc"/>')
-        svg.append(f'<text x="{cx}" y="{root_y + 20}" text-anchor="middle" font-size="12" font-weight="600" fill="#333">'
-                   f'Position {point.column}</text>')
-        svg.append(f'<text x="{cx}" y="{root_y + 36}" text-anchor="middle" font-size="10" fill="#888">'
-                   f'{total_at_point} runs, {p_str}</text>')
-        svg.append(f'<text x="{cx}" y="{root_y + 50}" text-anchor="middle" font-size="9" fill="#aaa">'
-                   f'{point.phase_context or ""}</text>')
-
-        # Leaf nodes
-        leaf_y = root_y + node_h + 60
-        total_leaf_w = n_branches * (leaf_w + h_gap) - h_gap
-        start_x = cx - total_leaf_w // 2
-
-        for i, (value, count) in enumerate(sorted_branches):
-            rate = point.success_by_value.get(value)
-            rate_str = f"{rate:.0%}" if rate is not None else "?"
-
-            if rate is not None and rate >= 0.6:
-                fill = "#e8f5e9"
-                stroke = "#2d7d2d"
-                text_color = "#2d7d2d"
-            elif rate is not None and rate <= 0.2:
-                fill = "#fce4ec"
-                stroke = "#c0392b"
-                text_color = "#c0392b"
-            else:
-                fill = "#fff8e1"
-                stroke = "#b07800"
-                text_color = "#b07800"
-
-            lx = start_x + i * (leaf_w + h_gap)
-            lcx = lx + leaf_w // 2
-
-            # Edge from root to leaf
-            edge_thickness = max(1, count / total_at_point * 6)
-            svg.append(f'<line x1="{cx}" y1="{root_y + node_h}" x2="{lcx}" y2="{leaf_y}" '
-                       f'stroke="{stroke}" stroke-width="{edge_thickness:.1f}" opacity="0.6"/>')
-
-            # Edge label (step name)
-            mid_y = root_y + node_h + 28
-            step_color = STEP_COLORS.get(value, DEFAULT_COLOR)
-            svg.append(f'<rect x="{lcx - 50}" y="{mid_y - 9}" width="100" height="18" rx="9" '
-                       f'fill="{step_color}" opacity="0.9"/>')
-            svg.append(f'<text x="{lcx}" y="{mid_y + 4}" text-anchor="middle" font-size="9" fill="white" font-weight="600">'
-                       f'{value}</text>')
-
-            # Leaf node
-            svg.append(f'<rect x="{lx}" y="{leaf_y}" width="{leaf_w}" height="{leaf_h}" '
-                       f'rx="6" fill="{fill}" stroke="{stroke}" stroke-width="1.5"/>')
-            svg.append(f'<text x="{lcx}" y="{leaf_y + 22}" text-anchor="middle" font-size="18" '
-                       f'font-weight="700" fill="{text_color}">{rate_str}</text>')
-            svg.append(f'<text x="{lcx}" y="{leaf_y + 40}" text-anchor="middle" font-size="11" fill="#666">'
-                       f'{count} runs</text>')
-
-            # Context
-            context = _get_context_str(point.column, value, alignment, runs)
-            if context and len(context) > 40:
-                context = context[:37] + "..."
-
-            if context:
-                svg.append(f'<text x="{lcx}" y="{leaf_y + 54}" text-anchor="middle" font-size="8" fill="#aaa">'
-                           f'{context}</text>')
-
-        svg.append('</svg>')
-        html += '<div style="margin-bottom:16px">' + '\n'.join(svg) + '</div>'
-
-    return html
-
-
-def _get_context_str(col: int, value: str, alignment: Alignment, runs: list[Run] | None = None) -> str:
-    """Get context window string for a branch, including attrs detail."""
-    if not alignment.matrix or not alignment.run_ids:
-        return ""
-
-    # Build detail lookup if we have runs
-    detail_for_run: dict[str, list[str]] = {}
-    if runs:
-        import os
-        from moirai.compress import NOISE_STEPS
-        for run in runs:
-            details = []
-            for s in run.steps:
-                if s.name in NOISE_STEPS:
-                    continue
-                detail = ""
-                if s.attrs:
-                    fp = s.attrs.get("file_path", "")
-                    if fp:
-                        detail = os.path.basename(fp)
-                    cmd = s.attrs.get("command", "")
-                    if cmd:
-                        detail = cmd[:40]
-                    pat = s.attrs.get("pattern", "")
-                    if pat:
-                        detail = pat[:40]
-                details.append(detail)
-            detail_for_run[run.run_id] = details
-
-    for run_idx in range(len(alignment.run_ids)):
-        rid = alignment.run_ids[run_idx]
-        if run_idx < len(alignment.matrix) and col < len(alignment.matrix[run_idx]):
-            if alignment.matrix[run_idx][col] == value:
-                row = alignment.matrix[run_idx]
-                start = max(0, col - 3)
-                end = min(len(row), col + 4)
-
-                # Context line
-                parts = []
-                for i in range(start, end):
-                    v = row[i] if i < len(row) else GAP
-                    if v == GAP:
-                        continue
-                    if i == col:
-                        parts.append(f"[{v}]")
-                    else:
-                        parts.append(v)
-                context = " → ".join(parts)
-
-                # Attrs detail for the divergence step itself
-                details = detail_for_run.get(rid, [])
-                non_gap_before = sum(1 for c in range(col) if c < len(row) and row[c] != GAP)
-                if non_gap_before < len(details) and details[non_gap_before]:
-                    context += f"  ({details[non_gap_before]})"
-
-                return context
-    return ""
-
+# --- Patterns table ---
 
 def _build_patterns_table(runs: list[Run]) -> str:
     """Build patterns table."""
@@ -489,6 +430,8 @@ def _build_patterns_table(runs: list[Run]) -> str:
 # --- Clusters and Diff (unchanged) ---
 
 def write_clusters_html(result: ClusterResult, path: Path, runs: list[Run] | None = None) -> Path:
+    import plotly.graph_objects as go
+
     path = Path(path)
     if not result.clusters:
         _write_empty(path, "No clusters.")
@@ -522,6 +465,9 @@ def write_clusters_html(result: ClusterResult, path: Path, runs: list[Run] | Non
 
 
 def write_diff_html(diff: CohortDiff, a_label: str, b_label: str, path: Path) -> Path:
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
     path = Path(path)
     a_rate, b_rate = diff.a_summary.success_rate, diff.b_summary.success_rate
     if a_rate is None and b_rate is None:
