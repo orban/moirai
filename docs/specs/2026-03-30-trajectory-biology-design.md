@@ -26,15 +26,32 @@ The existing codebase runs hundreds of Fisher's exact tests (contiguous n-grams 
 
 Implementation: a shared `benjamini_hochberg(p_values: list[float], q: float = 0.05) -> list[float | None]` function in a new `moirai/analyze/stats.py` module. Returns adjusted q-values. Callers filter by `q_value <= q` instead of `p_value <= p_threshold`.
 
-The existing duplicate Fisher's exact test implementations in `motifs.py` and `divergence.py` should be consolidated into `stats.py` as well.
+The existing duplicate Fisher's exact test implementations in `motifs.py` (lines 152-189) and `divergence.py` (lines 138-196) should be consolidated into `stats.py`.
 
-**Pooling across test families:** BH correction pools all p-values from all test types (contiguous n-grams, gapped motifs, divergence points, MI pairs) into a single correction. This is valid under PRDS (positive regression dependency on subsets), which holds for tests sharing anchors or runs (Benjamini & Yekutieli 2001). Document this assumption.
+**Pooling across test families:** BH correction pools all p-values from all test types into a single correction. The pooled families are: contiguous n-gram Fisher's, gapped motif Fisher's, divergence column Fisher's/chi-squared, and MI pair chi-squared. Entropy profiles (Section 4) produce no hypothesis tests and contribute no p-values to the pool. Pooling is valid under PRDS (positive regression dependency on subsets), which holds for tests sharing anchors or runs (Benjamini & Yekutieli 2001).
+
+### Orchestration
+
+BH pooling requires a coordinator — no single analysis module can produce final q-values in isolation. Create `moirai/analyze/pipeline.py` to orchestrate multi-module analysis:
+
+1. Run all test-producing analyses (motifs, gapped motifs, divergence, MI)
+2. Collect all raw p-values
+3. Apply BH correction
+4. Distribute adjusted q-values back to results
+
+Each analysis function returns results with raw p-values only. `pipeline.py` finalizes them. Independent callers who use analysis functions directly get valid raw p-values and can apply their own corrections.
+
+The pipeline module is also the natural home for the permutation test, which needs to rerun all statistical tests with shuffled labels.
 
 ### Permutation test validation
 
-`moirai patterns --permutation-test N` shuffles outcome labels (success/failure) N times (default 1000), reruns the full discovery pipeline each time, and reports empirical FDR. This validates whether the pipeline produces signal or noise on a specific dataset.
+`moirai patterns --permutation-test N` shuffles outcome labels (success/failure) N times (default 1000), reruns the statistical tests, and reports empirical FDR. This validates whether the pipeline produces signal or noise on a specific dataset.
 
-This is a diagnostic, not a filter. It's expensive (N × full pipeline), so it's opt-in. The label-shuffle null is correct for validating Fisher's exact tests (it directly mirrors the null hypothesis). Sequence-shuffle tests a different question ("are patterns structurally surprising?") and could be added later as a separate diagnostic.
+**Critical: caching.** The permutation test caches all sequence-derived computations (alignments, pattern-run membership, MI column values). Only statistical tests (contingency table construction, Fisher's exact, chi-squared, BH correction) are re-run per permutation. Without caching, 1000 permutations at N=500 would take days. With caching, it takes under 10 minutes.
+
+**Recommended optimization:** Pre-compute a boolean membership matrix (patterns × runs). Per permutation, shuffle the label vector, multiply to get all contingency tables in one operation. This brings per-iteration cost to ~5ms, making 1000 iterations feasible in under 10 seconds at any scale.
+
+This is a diagnostic, not a filter. It's opt-in. The label-shuffle null is correct for validating Fisher's exact tests (it directly mirrors the null hypothesis). The permutation test scope matches the BH pooling scope — it simulates the same pool of tests that BH corrects.
 
 ### Ranking
 
@@ -43,6 +60,32 @@ All patterns (contiguous and gapped motifs, MI pairs) are ranked by BH-adjusted 
 ### Success rate convention
 
 Throughout this design, `success_rate = success_runs / (success_runs + fail_runs)`. The denominator excludes runs with unknown outcomes. `total_runs` is the count of all matching runs including unknowns. Both fields are present on all pattern dataclasses to avoid ambiguity.
+
+### Shared type interface
+
+`Motif` and `GappedMotif` share most fields. Define a `PatternResult` protocol so downstream consumers (viz, narrate, recommend) handle both types uniformly without `isinstance` checks:
+
+```python
+class PatternResult(Protocol):
+    total_runs: int
+    success_runs: int
+    fail_runs: int
+    success_rate: float
+    baseline_rate: float
+    lift: float
+    risk_difference: float
+    p_value: float | None
+    q_value: float | None
+
+    @property
+    def display(self) -> str: ...
+```
+
+Add `q_value: float | None = None` and `risk_difference: float` to the existing `Motif` and `DivergencePoint` dataclasses as part of Stage 1.
+
+### Dataclass placement
+
+All new dataclasses go in `schema.py`, following the existing convention where `Step`, `Run`, `Alignment`, `DivergencePoint`, `ClusterInfo`, etc. all live there. Move the existing `Motif` class from `motifs.py` to `schema.py` as well to resolve the current inconsistency.
 
 ---
 
@@ -56,50 +99,34 @@ Throughout this design, `success_rate = success_runs / (success_runs + fail_runs
 
 **Pattern representation:** An ordered subsequence of anchor steps with unconstrained gaps. Pattern `(A, B, C)` matches a run if there exist positions i < j < k where step[i] = A, step[j] = B, step[k] = C. No gap bounds are learned or enforced.
 
-Descriptive statistics about gap lengths (median gap between each anchor pair) are computed for reporting but not used for matching or filtering.
-
 **Matching semantics:** Greedy left-to-right scan. For pattern `(A, B, C)`: find the first A, then the first B after that A, then the first C after that B. This is deterministic and O(L) per pattern per run. When step types repeat (e.g., `read(source)` appears 10 times), greedy matching uses the earliest valid assignment.
 
 **Frequency filter:** Only step types appearing in >= 5% of runs are "frequent" and enter the candidate pool. Report the actual number of tests conducted alongside results.
 
 ### Discovery algorithm
 
-1. **Build frequency index.** For each of V enriched step types, count runs containing it. Drop types below max(min_count, 5% of N).
+1. **Build frequency index.** For each of V enriched step types, count runs containing it. Drop types below max(min_count, 5% of N). Map surviving types to integer IDs for faster hashing throughout.
 
 2. **Enumerate ordered pairs.** All (A, B) from frequent types where A appears before B in >= min_count runs. Compute Fisher's exact p-value for each pair's association with outcome.
 
 3. **Enumerate ordered triples.** All (A, B, C) from frequent types as ordered subsequences in >= min_count runs. Fisher's exact test.
 
-4. **Optionally enumerate length-4** (opt-in via `--max-length 4`). Uses prefix pruning: only track a triple in the length-4 pass if that triple survived min_count at stage 3. This reduces the inner loop by ~90%.
+4. **Optionally enumerate length-4** (opt-in via `--max-length 4`, default is 3). Uses prefix pruning: only track a triple in the length-4 pass if that triple survived min_count at stage 3. This reduces the inner loop by ~90%.
 
-5. **BH correction.** Pool all raw p-values (gapped + contiguous + divergence + MI) and apply BH at q = 0.05.
+5. **BH correction.** Handled by `pipeline.py`: pool all raw p-values (gapped + contiguous + divergence + MI) and apply BH at q = 0.05.
 
 6. **Prune.** After BH correction, drop patterns that are strict subsequences of longer patterns, but only if the longer pattern covers the same or more runs AND has an equal or better q-value. If the shorter pattern covers more runs (is more general), keep both. Check transitive subsequence relations (a length-2 can be pruned by a length-4 directly). Pruning is display-only — no re-computation of q-values after pruning.
 
 7. **Rank** by q-value ascending, risk difference as tiebreaker.
 
-Default max length: 3 (runs in under 1 second at current scale). Length-4 is opt-in due to higher computational cost (~5s at N=165/V=20, ~2 min at N=500/V=30 without prefix pruning, much less with it).
+### Counting
 
-### Counting optimization
-
-**Single-pass per run.** Walk the step sequence maintaining:
-- `seen_types: set[int]` — types encountered so far (for pairs)
-- `seen_pairs: set[tuple[int, int]]` — completed pairs (for triples)  
-- `seen_triples: set[tuple[int, int, int]]` — completed triples (for length-4, opt-in)
-- `run_pairs_seen: set[tuple[int, int]]` — deduplication per run
-- `run_triples_seen: set[tuple[int, int, int]]` — deduplication per run
-
-At each step with type z:
-- For each t in `seen_types`: if (t, z) not in `run_pairs_seen`, increment pair count, add to `run_pairs_seen`, add to `seen_pairs`
-- For each (t, u) in `seen_pairs`: if (t, u, z) not in `run_triples_seen`, increment triple count, add to `run_triples_seen`, add to `seen_triples`
-- For length-4: for each (t, u, v) in `seen_triples` where (t, u, v) is in `surviving_triples`: emit (t, u, v, z)
-
-**Map types to integer IDs** early (in stage 1). Use integer tuples throughout for faster hashing.
+Single-pass per run using integer IDs. Walk the step sequence maintaining `seen_types`, `seen_pairs`, and per-run deduplication sets (`run_pairs_seen`, `run_triples_seen`) to avoid double-counting when step types repeat. For length-4, only track triples that survived min_count at stage 3 (`surviving_triples` set).
 
 Total complexity:
-- Pairs: O(N × L × V). ~132K ops at current scale. Negligible.
-- Triples: O(N × L × V²). ~2.6M ops. Under 1s.
-- Length-4 with prefix pruning: O(N × L × |surviving_triples|). Depends on data, typically a few seconds.
+- Pairs: O(N × L × V). Negligible.
+- Triples: O(N × L × |seen_pairs|). Under 1s at current scale, ~2s at N=500/V=30.
+- Length-4 with prefix pruning: O(N × L × |surviving_triples|). Typically a few seconds. Opt-in.
 
 ### Output
 
@@ -113,10 +140,10 @@ class GappedMotif:
     success_rate: float          # success_runs / (success_runs + fail_runs)
     baseline_rate: float         # overall success rate among known-outcome runs
     lift: float                  # success_rate / baseline_rate
+    risk_difference: float       # success_rate - baseline_rate
     p_value: float | None        # raw Fisher's exact
-    q_value: float | None        # BH-adjusted
-    avg_first_position: float    # mean normalized position of first anchor across matching runs
-    median_gaps: list[float]     # median gap between each adjacent anchor pair (descriptive)
+    q_value: float | None        # BH-adjusted (set by pipeline)
+    avg_position: float          # mean normalized position of first anchor
 
     @property
     def display(self) -> str:
@@ -135,7 +162,8 @@ moirai patterns path/to/runs/ --permutation-test 1000  # validate with permutati
 
 - `find_gapped_motifs()` in `moirai/analyze/motifs.py`
 - `benjamini_hochberg()`, `fishers_exact_2x2()` in new `moirai/analyze/stats.py`
-- BH correction retroactively applied to existing `find_motifs()` and `find_divergence_points()`
+- BH orchestration in new `moirai/analyze/pipeline.py`
+- `GappedMotif` dataclass in `moirai/schema.py`
 
 ---
 
@@ -145,13 +173,19 @@ moirai patterns path/to/runs/ --permutation-test 1000  # validate with permutati
 
 Divergence analysis treats each aligned column independently. But agent decisions are coupled: reading the test file at step 10 might determine whether the agent loops at step 30. These long-range couplings are invisible to column-by-column analysis.
 
+### Minimum sample size
+
+MI requires estimating joint probability distributions P(x, y) over column pairs. With V step types per column, reliable MI estimation needs enough runs to populate the joint distribution.
+
+**Requirement:** N >= 500 runs with known outcomes. Below this threshold, `moirai mi` prints a warning and exits. At N=500 with V=20, the average cell in a 20×20 joint distribution has ~1.25 observations — still sparse, but NMI thresholding filters out unreliable pairs. At N=2000+ (achievable with SWE-bench/SWE-smith data), MI estimation becomes comfortable.
+
 ### Design
 
 **What it computes:** For each pair of aligned columns (i, j), the mutual information between step values at those positions across all runs. High MI means knowing the agent's choice at position i tells you what it'll do at position j.
 
 **Algorithm:**
 
-1. Take an existing alignment from `align_runs()`.
+1. Take an existing alignment from `align_runs()`. MI reuses this alignment — it does not recompute it. The alignment itself is the dominant cost (~7s at N=165, ~3.5 min at N=500).
 
 2. For each column pair (i, j) where i < j, compute MI from the joint distribution of step values:
 
@@ -167,7 +201,11 @@ Divergence analysis treats each aligned column independently. But agent decision
 
 5. For each high-MI pair, test whether the *combination* of values at (i, j) predicts success better than either column alone. Chi-squared test on the (value_i × value_j × outcome) contingency table. P-value feeds into the shared BH correction pool.
 
-**Computational cost:** O(C² × N) where C is alignment columns (~50-110), N is runs. At C=110, N=165: ~1M operations. Negligible.
+**Memory:** Compute MI per column pair in a streaming loop. Discard the joint distribution immediately for pairs below the NMI threshold. Do not materialize all C²/2 joint distributions simultaneously (would peak at ~540MB at large scale).
+
+**Computational cost:** O(C² × N) where C is alignment columns (~50-110), N is runs. Under 0.5s even at large scale. The alignment prerequisite dominates.
+
+**Serialization note:** `joint_values` uses tuple keys `(str, str)` which aren't valid JSON keys. Flatten to `"val_i|val_j"` string keys for serialization.
 
 ### Output
 
@@ -180,19 +218,21 @@ class PositionalMI:
     normalized_mi: float              # NMI in [0, 1]
     joint_values: dict[tuple[str, str], int]  # (val_i, val_j) -> count
     outcome_p_value: float | None     # chi-sq: does the combination predict outcome?
-    outcome_q_value: float | None     # BH-adjusted
+    outcome_q_value: float | None     # BH-adjusted (set by pipeline)
 ```
 
 ### CLI
 
 ```bash
-moirai mi path/to/runs/              # show high-MI column pairs
+moirai mi path/to/runs/              # show high-MI column pairs (requires N >= 500)
 moirai branch path/to/runs/ --mi     # annotate divergence points with MI couplings
 ```
 
 ### Where it lives
 
-`positional_mutual_information()` in new `moirai/analyze/coupling.py`. Takes an `Alignment` and list of `Run` objects.
+- `positional_mutual_information()` in new `moirai/analyze/coupling.py`
+- `PositionalMI` dataclass in `moirai/schema.py`
+- MI p-values included in `pipeline.py` BH pool
 
 ### Relationship to divergence analysis
 
@@ -224,11 +264,15 @@ Section 1 (gapped motifs) must be implemented and validated on real data first. 
 
 4. Sort matched motifs by first anchor position to get the domain architecture.
 
-5. Compute pairwise domain-architecture distance using Needleman-Wunsch at the motif level. Match = same motif ID, mismatch/gap scored the same way as step-level alignment but operating on motif IDs instead.
+5. Compute pairwise domain-architecture distance using Needleman-Wunsch at the motif level. Parameterize `_nw_align()` with a scoring function rather than duplicating the algorithm — motif-level alignment may want partial credit for similar motifs.
 
 6. Cluster runs by domain-architecture distance. These are "strategy clusters."
 
 7. Compare strategy clusters to existing step-level clusters. Report where they agree and disagree.
+
+**Computational cost:**
+- Motif matching: O(M × L × N) where M is number of significant motifs (typically 10-50). Under 0.5s.
+- Pairwise NW on domain architectures (length ~5-15): O(N² × D²) where D is domain architecture length. At N=500, D=10: ~2s. Acceptable.
 
 ### Output
 
@@ -257,7 +301,8 @@ moirai strategies path/to/runs/     # show strategy clusters with domain archite
 
 ### Where it lives
 
-New `moirai/analyze/domains.py`. Depends on `motifs.py` (Section 1) and `align.py`.
+- New `moirai/analyze/domains.py`. Depends on `motifs.py` (Section 1) and `align.py`.
+- `DomainArchitecture`, `StrategyCluster` dataclasses in `moirai/schema.py`.
 
 ---
 
@@ -267,15 +312,21 @@ New `moirai/analyze/domains.py`. Depends on `motifs.py` (Section 1) and `align.p
 
 Moirai can tell you *what* agents do (step sequences) and *where* they diverge (divergence points). It can't tell you *how* agents behave over time — whether they're methodical, erratic, stuck in loops, or shifting strategies. The "rhythm" of a trajectory is invisible.
 
+### Minimum sample size
+
+Conditional entropy with context window k requires enough runs per cluster to populate context-step distributions.
+
+**Adaptive context:** Use k=3 when the cluster has >= 200 runs with known outcomes. Fall back to k=1 (unconditional column entropy split by outcome) for smaller clusters. k=1 requires no context estimation and works reliably at any sample size — it's 90% of the value (showing where successful vs failing runs differ in predictability) without the sparsity risk.
+
 ### Design
 
 **What it computes:** A per-column conditional entropy curve showing how predictable the agent's behavior is at each point in the aligned trajectory.
 
 **Algorithm:**
 
-1. Take an existing alignment and group runs by cluster.
+1. Take an existing alignment (reuse, don't recompute) and group runs by cluster.
 
-2. Within each cluster, for each aligned column i, compute the conditional entropy of the step at column i given a context window of the previous k columns (default k=3):
+2. Within each cluster, for each aligned column i, compute the conditional entropy of the step at column i given a context window of the previous k columns:
 
    ```
    H(column_i | context) = -Σ P(context) × Σ P(step | context) × log₂(P(step | context))
@@ -291,7 +342,7 @@ Moirai can tell you *what* agents do (step sequences) and *where* they diverge (
 
 **Key distinction from divergence analysis:** Divergence asks "do runs split here?" Entropy rate asks "is behavior predictable here?" A position can have low divergence (everyone does roughly the same thing) but high entropy (the choice is unpredictable given context). Or high divergence (runs split) but low entropy in each branch (each branch is internally consistent).
 
-**Computational cost:** O(C × N × V^k). At C=110, N=165, V=20, k=3: ~145M with hash-based context lookup. A few seconds. Reducing k to 2 makes it trivially fast. k=3 is the default; k=2 available for large datasets.
+**Computational cost:** O(C × N) for building empirical distributions, plus O(C × min(N, V^k)) for entropy computation. At C=110, N=500: under 10ms. The V^k factor is theoretical — you iterate over observed contexts (bounded by N), not all possible contexts. k=3 is trivially fast at any projected scale.
 
 ### Output
 
@@ -299,6 +350,7 @@ Moirai can tell you *what* agents do (step sequences) and *where* they diverge (
 @dataclass
 class EntropyProfile:
     cluster_id: int
+    context_k: int                        # actual k used (1 or 3, adaptive)
     columns: list[int]
     entropy_values: list[float]           # conditional entropy per column
     success_entropy: list[float | None]   # entropy among successful runs only
@@ -316,7 +368,8 @@ In the HTML report (`moirai branch --html`), entropy profiles can be rendered as
 
 ### Where it lives
 
-New `moirai/analyze/rhythm.py`. Takes an `Alignment` and list of `Run` objects.
+- New `moirai/analyze/rhythm.py`. Takes an `Alignment` and list of `Run` objects.
+- `EntropyProfile` dataclass in `moirai/schema.py`.
 
 ---
 
@@ -326,31 +379,47 @@ The staged approach, in dependency order:
 
 ### Stage 1: Statistical foundation
 - Create `moirai/analyze/stats.py` with `benjamini_hochberg()` and consolidated `fishers_exact_2x2()`
+- Create `moirai/analyze/pipeline.py` for multi-module BH orchestration
+- Add `q_value` and `risk_difference` fields to existing `Motif` and `DivergencePoint`
+- Move `Motif` dataclass to `schema.py`
 - Retroactively apply BH correction to `find_motifs()` and `find_divergence_points()`
 - Update ranking to use q-value + risk difference
+- Add `--permutation-test` diagnostic (validates the full BH pool, not just motifs)
 - This is a bug fix to the existing system, independent of new features
 
 ### Stage 2: Gapped motifs (Section 1)
 - Add `find_gapped_motifs()` to `motifs.py`
+- Add `GappedMotif` to `schema.py`, define `PatternResult` protocol
 - Extend `moirai patterns` CLI with `--gapped` and `--max-length` flags
-- Add `--permutation-test` diagnostic
+- Integrate with `pipeline.py` for BH pooling
 - Validate on real eval-harness and SWE-smith data before proceeding
 
 ### Stage 3: Positional MI (Section 2)
 - Create `moirai/analyze/coupling.py`
+- Add `PositionalMI` to `schema.py`
 - Add `moirai mi` command and `--mi` flag to `moirai branch`
-- Independent of Stage 2; can be built in parallel
+- Integrate with `pipeline.py` BH pool
+- Requires N >= 500 runs; independent of Stage 2
 
 ### Stage 4: Entropy rate profiles (Section 4)
 - Create `moirai/analyze/rhythm.py`
+- Add `EntropyProfile` to `schema.py`
 - Add `moirai rhythm` command
+- Adaptive k (1 or 3) based on cluster size
 - Independent of Stages 2-3; can be built in parallel with Stage 3
 
 ### Stage 5: Domain architecture (Section 3)
 - Create `moirai/analyze/domains.py`
+- Add `DomainArchitecture`, `StrategyCluster` to `schema.py`
 - Add `moirai strategies` command
+- Parameterize `_nw_align()` scoring function for motif-level alignment
 - Depends on Stage 2 (needs validated motifs as input)
 - Build only after Stage 2 motifs are validated on real data
+
+### Follow-up work (not in scope)
+- Update `recommend.py` to consume `GappedMotif`, `PositionalMI`, `EntropyProfile`
+- Update `narrate.py` to incorporate MI couplings into findings
+- HTML viz renderers for MI heatmaps, entropy sparklines, domain architecture timelines
 
 ## Where the analogy holds and where it breaks
 
