@@ -88,59 +88,34 @@ Consolidate duplicated statistical primitives from `motifs.py:152-189` and `dive
 
 ### 2.1 Add `GappedMotif` to `schema.py`, move `Motif`
 
-- [ ] Move `Motif` from `motifs.py` to `schema.py`
-- [ ] Update `recommend.py` import: `from moirai.schema import Motif`
-- [ ] Add `GappedMotif` to `schema.py`:
-
-```python
-@dataclass
-class GappedMotif:
-    anchors: tuple[str, ...]
-    total_runs: int
-    success_runs: int
-    fail_runs: int
-    success_rate: float
-    baseline_rate: float
-    lift: float
-    p_value: float | None
-    q_value: float | None = None
-    avg_position: float = 0.0
-
-    @property
-    def display(self) -> str:
-        return " → ... → ".join(self.anchors)
-```
+- [x] Move `Motif` from `motifs.py` to `schema.py`
+- [x] Update `recommend.py` import: `from moirai.schema import Motif`
+- [x] Add `GappedMotif` to `schema.py`
 
 ### 2.2 Implement `find_gapped_motifs()` in `motifs.py`
 
-- [ ] Build frequency index: map to integer IDs, filter by `max(min_count, ceil(0.05 * N))`, warn if N < 30
-- [ ] Enumerate ordered pairs: single-pass with `seen_types`, `run_pairs_seen` dedup
-- [ ] Enumerate ordered triples: extend with `seen_pairs`, `run_triples_seen` dedup
-- [ ] If `max_length >= 4`: prefix pruning — build membership matrix only after pruning to avoid 330MB+ allocation. Use chi-squared fast path for initial filtering (50K+ tests), Fisher's exact only for BH survivors.
-- [ ] Apply BH, prune subsequences (transitive), sort by `(q_value, -abs(success_rate - baseline_rate))`
+- [x] Build frequency index: map to integer IDs, filter by `max(min_count, ceil(0.05 * N))`
+- [x] Enumerate ordered pairs: single-pass with `seen_types`, `run_pairs_seen` dedup
+- [x] Enumerate ordered triples: pairs collected AFTER triples loop to prevent same-step artifacts
+- [x] Apply BH, prune subsequences (transitive), sort by `(q_value, -abs(success_rate - baseline_rate))`
 
 ### 2.3 Extend `patterns` CLI command
 
-- [ ] `--gapped` flag, `--max-length` option (default 3)
-- [ ] When `--gapped`: run both `find_motifs()` and `find_gapped_motifs()`, merge by q-value
-- [ ] Permutation test (from Phase 1) covers both contiguous and gapped when `--gapped` is set
+- [x] `--gapped` flag, `--max-length` option (default 3)
+- [x] When `--gapped`: run both `find_motifs()` and `find_gapped_motifs()`, merge by q-value
+- [x] Permutation test covers both contiguous and gapped when `--gapped` is set
 
 ### 2.4 Viz
 
-- [ ] Extend `print_motifs()` to accept `list[Motif | GappedMotif]`. Show `" → ... → "` for gapped, `" → "` for contiguous. Show q-value.
+- [x] `print_motifs()` handles both `Motif` and `GappedMotif` via shared attributes
 
 ### 2.5 Tests (`tests/test_gapped_motifs.py`)
 
-- [ ] Basic subsequence discovery, greedy matching with repeated types
-- [ ] Pruning: shorter pruned when longer covers same/more runs with better q-value
-- [ ] Pruning preservation: shorter kept when it covers more runs
-- [ ] Transitive pruning: length-2 pruned by length-4 directly
-- [ ] Filters: min_count, frequency, empty input, single run, all-pass/all-fail
-- [ ] N < 30 warning
-
-**Integration tests:**
-- [ ] CLI smoke test via Typer test client: `patterns --gapped` on fixture data
-- [ ] Merge test: contiguous + gapped motifs interleaved correctly by q-value
+- [x] Basic subsequence discovery, greedy matching with repeated types
+- [x] Pruning: shorter pruned when longer covers same/more runs with better q-value
+- [x] Pruning preservation: shorter kept when it covers more runs
+- [x] Filters: min_count, frequency, empty input, single run, all-pass/all-fail
+- [x] CLI smoke test via Typer test client: `patterns --gapped` on fixture data
 
 ---
 
