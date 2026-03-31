@@ -110,17 +110,15 @@ This run spent 76% of its steps exploring (reading, searching) before making 3 t
 
 ### HTML report
 
-`moirai branch --html report.html` generates a per-task analysis. Each task with mixed outcomes gets aligned trajectories and decision trees showing where runs diverged:
+`moirai branch --html report.html` generates a per-task analysis. Each task with mixed outcomes gets aligned trajectories and fork comparisons showing where runs diverged:
 
-**Per-task trajectory alignment** — repeated runs of the same task, aligned by step sequence. Pass runs on top, fail runs below. Each cell is an enriched step (file type, command type, search specificity).
+**Per-task trajectory alignment** — repeated runs of the same task, aligned by step sequence. Dendrogram on the left clusters similar trajectories; pass/fail markers show outcomes. Each cell is an enriched step (file type, command type, search specificity), colored by category. Numbered badges mark divergence points.
 
 ![trajectory alignment](docs/images/alignment.png)
 
-**Divergence decision trees** — at each statistically significant fork, which step did agents choose and what happened? Node size proportional to run count, color by outcome.
+**Pass vs fail comparison at forks** — at each structural split, a side-by-side comparison of what the passing and failing runs actually did. Includes the agent's own reasoning at the decision point and the full trajectory with actual file names and commands inline.
 
-![divergence trees](docs/images/divergence_trees.png)
-
-Each task also gets a **narrative finding** explaining what happened at the fork in plain language, with full trajectories and actual file names/commands inline.
+![divergence comparison](docs/images/divergence_trees.png)
 
 ## What you can do with this
 
