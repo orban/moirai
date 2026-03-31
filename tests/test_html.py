@@ -28,8 +28,8 @@ class TestBuildDendrogramHeatmap:
         svg = _build_dendrogram_heatmap(alignment, runs, points)
 
         assert "<path" in svg  # dendrogram bracket paths
-        assert "#2d7d2d" in svg  # green outcome strip (pass)
-        assert "#c0392b" in svg  # red outcome strip (fail)
+        assert "#3fb950" in svg  # green outcome strip (pass)
+        assert "#f85149" in svg  # red outcome strip (fail)
         assert "<title>" in svg  # heatmap tooltips
 
     def test_one_run_no_dendrogram(self):
