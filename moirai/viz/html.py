@@ -67,10 +67,26 @@ def write_branch_html(
     # Build data payload
     data = _build_data(runs, task_results)
 
-    # Load template and inject data as JSON
+    # Load template and inject data
+    # SVG strings contain Alpine.js attributes with quotes that break JSON embedding.
+    # Extract SVGs from data and inject them as separate hidden divs.
+    svgs = {}
+    for task in data.get("tasks", []):
+        svg_key = task["safe_id"]
+        svgs[svg_key] = task.pop("svg", "")
+
     template_path = _TEMPLATE_DIR / "branch.html"
     template = template_path.read_text(encoding="utf-8")
-    html = template.replace("/*__DATA__*/", json.dumps(data, default=str))
+
+    # Inject JSON data (now without SVG strings)
+    html = template.replace('"__DATA_PLACEHOLDER__"', json.dumps(data, default=str))
+
+    # Inject SVGs as hidden divs before </body>, referenced by task id
+    svg_divs = "\n".join(
+        f'<div id="svg-{key}" style="display:none">{svg}</div>'
+        for key, svg in svgs.items()
+    )
+    html = html.replace("</body>", f"{svg_divs}\n</body>")
 
     path.write_text(html, encoding="utf-8")
     return path

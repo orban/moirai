@@ -369,7 +369,10 @@
            :style="`color:var(--${task.interpretation?.level === 'success' ? 'pass' : task.interpretation?.level === 'accent' ? 'accent' : 'text-muted'})`"
            x-text="task.interpretation?.text"></div>
 
-      <div class="heatmap-wrap" x-html="task.svg"></div>
+      <div class="heatmap-wrap" x-data x-init="
+        let src = document.getElementById('svg-' + task.safe_id);
+        if (src) { $el.appendChild(src.firstElementChild.cloneNode(true)); }
+      "></div>
 
       <div x-show="task.comparisons.length" class="comps">
         <template x-for="comp in task.comparisons" :key="comp.number">
@@ -487,7 +490,7 @@
 </div>
 
 <script>
-const DATA = /*__DATA__*/{stats:{total_runs:0,pass_rate:"0%",n_tasks:0,n_div:0},legend:[],tasks:[],patterns:{baseline:null,positive:[],negative:[]}}/**/;
+const DATA = "__DATA_PLACEHOLDER__";
 
 function moirai() {
   return {
