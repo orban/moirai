@@ -15,18 +15,18 @@ Add `output.reasoning` and `output.result` to each step by parsing Claude Code J
 
 **File:** `scripts/convert_eval_harness.py`
 
-- [ ] Refactor `main()` to use argparse (currently `sys.argv`). Add `--transcripts` flag (default: `~/.claude/projects/`)
-- [ ] Add `find_transcript(trial_path, transcripts_dir)` — glob for matching workspace directory by exact path pattern, return JSONL path or None. Warn to stderr when multiple matches found.
-- [ ] Add `parse_transcript(jsonl_path)` — read JSONL, extract per-`tool_use` reasoning from the nearest preceding `thinking`/`text` block in the same content array. Match `tool_result` back to `tool_use` by `tool_use_id`. Skip malformed lines.
-- [ ] Modify `convert_trial()` — merge transcript reasoning into log-parsed steps by sequential position. Filter `[result]` system steps before merging (they have no transcript counterpart). Tool name is a sanity-check assertion: when it fails, stop merging at that point and warn (don't silently attach wrong reasoning to remaining steps).
+- [x] Refactor `main()` to use argparse (currently `sys.argv`). Add `--transcripts` flag (default: `~/.claude/projects/`)
+- [x] Add `find_transcript(trial_path, transcripts_dir)` — glob for matching workspace directory by exact path pattern, return JSONL path or None. Warn to stderr when multiple matches found.
+- [x] Add `parse_transcript(jsonl_path)` — read JSONL, extract per-`tool_use` reasoning from the nearest preceding `thinking`/`text` block in the same content array. Match `tool_result` back to `tool_use` by `tool_use_id`. Skip malformed lines.
+- [x] Modify `convert_trial()` — merge transcript reasoning into log-parsed steps by sequential position. Filter `[result]` system steps before merging (they have no transcript counterpart). Tool name is a sanity-check assertion: when it fails, stop merging at that point and warn (don't silently attach wrong reasoning to remaining steps).
 
 ### Tests
 
 **File:** `tests/test_convert_eval_harness.py` (new)
 
-- [ ] `parse_transcript` on a synthetic JSONL with multi-tool-use message — verify each tool_use gets its own reasoning
-- [ ] `convert_trial` merge path — mock log + mock JSONL, verify reasoning lands on correct steps
-- [ ] `convert_trial` without transcript — fallback to log-only, no crash
+- [x] `parse_transcript` on a synthetic JSONL with multi-tool-use message — verify each tool_use gets its own reasoning
+- [x] `convert_trial` merge path — mock log + mock JSONL, verify reasoning lands on correct steps
+- [x] `convert_trial` without transcript — fallback to log-only, no crash
 
 **Commit:** `feat: eval-harness converter — extract reasoning from Claude Code transcripts`
 
