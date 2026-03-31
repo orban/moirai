@@ -477,16 +477,20 @@ def print_diff(diff: CohortDiff, a_label: str, b_label: str) -> None:
             console.print(f"  {compressed}  [dim]({count})[/dim]")
 
 
-def print_motifs(motifs: list, baseline: float, n_runs: int) -> None:
+def print_motifs(motifs: list, baseline: float, n_runs: int, n_tested: int = 0) -> None:
     """Print discriminative motif patterns.
 
     Args:
         motifs: list of Motif objects from analyze/motifs.py
         baseline: overall success rate
         n_runs: total number of runs analyzed
+        n_tested: total candidates tested before BH correction (for transition UX)
     """
     if not motifs:
-        console.print("No significant patterns found.")
+        if n_tested > 0:
+            console.print(f"[dim]{n_tested} patterns tested, 0 survived BH correction at q=0.05[/dim]")
+        else:
+            console.print("No significant patterns found.")
         return
 
     console.print(f"[bold]Discriminative patterns[/bold] ({n_runs} runs, {baseline:.0%} baseline success)\n")
@@ -498,23 +502,23 @@ def print_motifs(motifs: list, baseline: float, n_runs: int) -> None:
     if positive:
         console.print("[green][bold]Patterns correlated with success:[/bold][/green]")
         for m in positive[:10]:
-            p_str = f"p={m.p_value:.3f}" if m.p_value is not None else ""
+            q_str = f"q={m.q_value:.3f}" if getattr(m, "q_value", None) is not None else (f"p={m.p_value:.3f}" if m.p_value is not None else "")
             pos_str = "early" if m.avg_position < 0.3 else ("late" if m.avg_position > 0.7 else "mid")
             console.print(
                 f"  [green]{m.display}[/green]  "
                 f"{m.success_rate:.0%} success ({m.total_runs} runs) vs {baseline:.0%} baseline  "
-                f"[dim]{pos_str}, {p_str}[/dim]"
+                f"[dim]{pos_str}, {q_str}[/dim]"
             )
         console.print()
 
     if negative:
         console.print("[red][bold]Patterns correlated with failure:[/bold][/red]")
         for m in negative[:10]:
-            p_str = f"p={m.p_value:.3f}" if m.p_value is not None else ""
+            q_str = f"q={m.q_value:.3f}" if getattr(m, "q_value", None) is not None else (f"p={m.p_value:.3f}" if m.p_value is not None else "")
             pos_str = "early" if m.avg_position < 0.3 else ("late" if m.avg_position > 0.7 else "mid")
             console.print(
                 f"  [red]{m.display}[/red]  "
                 f"{m.success_rate:.0%} success ({m.total_runs} runs) vs {baseline:.0%} baseline  "
-                f"[dim]{pos_str}, {p_str}[/dim]"
+                f"[dim]{pos_str}, {q_str}[/dim]"
             )
         console.print()

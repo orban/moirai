@@ -385,7 +385,7 @@ def _build_patterns_table(runs: list[Run]) -> str:
     """Build patterns table."""
     from moirai.analyze.motifs import find_motifs
 
-    motifs = find_motifs(runs, min_n=3, max_n=5, min_count=3)
+    motifs, _ = find_motifs(runs, min_n=3, max_n=5, min_count=3)
     known = [r for r in runs if r.result.success is not None]
     if not known:
         return "<p>No outcome data.</p>"

@@ -24,7 +24,7 @@ class TestDivergencePoints:
         runs = [_make_run("r1", ["llm", "tool"]),
                 _make_run("r2", ["llm", "tool"]),
                 _make_run("r3", ["llm", "tool"])]
-        points = find_divergence_points(alignment, runs)
+        points, _ = find_divergence_points(alignment, runs)
         assert points == []
 
     def test_mixed_column_detected(self):
@@ -40,8 +40,7 @@ class TestDivergencePoints:
         runs = [_make_run("r1", ["llm", "judge"], True),
                 _make_run("r2", ["llm", "tool"], False),
                 _make_run("r3", ["llm", "judge"], True)]
-        # min_branch_size=1 to test with small fixtures
-        points = find_divergence_points(alignment, runs, min_branch_size=1, p_threshold=1.0)
+        points, _ = find_divergence_points(alignment, runs, min_branch_size=1, q_threshold=1.0)
         assert len(points) == 1
         assert points[0].column == 1
         assert points[0].value_counts == {"judge": 2, "tool": 1}
@@ -56,7 +55,7 @@ class TestDivergencePoints:
             level="type",
         )
         runs = [_make_run("r1", ["llm"]), _make_run("r2", ["tool"])]
-        points = find_divergence_points(alignment, runs, min_branch_size=1, p_threshold=1.0)
+        points, _ = find_divergence_points(alignment, runs, min_branch_size=1, q_threshold=1.0)
         assert len(points) == 1
         assert abs(points[0].entropy - 1.0) < 0.01
 
@@ -75,13 +74,13 @@ class TestDivergencePoints:
                 _make_run("r2", ["llm", "judge"], True),
                 _make_run("r3", ["llm", "tool"], False),
                 _make_run("r4", ["llm", "tool"], False)]
-        points = find_divergence_points(alignment, runs, min_branch_size=1, p_threshold=1.0)
+        points, _ = find_divergence_points(alignment, runs, min_branch_size=1, q_threshold=1.0)
         assert len(points) == 1
         assert points[0].success_by_value["judge"] == 1.0
         assert points[0].success_by_value["tool"] == 0.0
 
     def test_significance_filtering(self):
-        """Points where branch doesn't predict outcome get filtered by p_threshold."""
+        """Points where branch doesn't predict outcome get filtered by q_threshold."""
         alignment = Alignment(
             run_ids=["r1", "r2", "r3", "r4"],
             matrix=[
@@ -97,8 +96,8 @@ class TestDivergencePoints:
                 _make_run("r2", ["llm", "judge"], False),
                 _make_run("r3", ["llm", "tool"], True),
                 _make_run("r4", ["llm", "tool"], False)]
-        # p-value should be 1.0 (perfectly independent) — filtered at 0.05
-        points = find_divergence_points(alignment, runs, min_branch_size=1, p_threshold=0.05)
+        # p-value should be 1.0 — filtered at q=0.05
+        points, _ = find_divergence_points(alignment, runs, min_branch_size=1, q_threshold=0.05)
         assert len(points) == 0
 
     def test_min_branch_size_filtering(self):
@@ -115,8 +114,7 @@ class TestDivergencePoints:
         runs = [_make_run("r1", ["llm", "judge"], True),
                 _make_run("r2", ["llm", "tool"], False),
                 _make_run("r3", ["llm", "judge"], True)]
-        # tool branch has only 1 run — filtered at min_branch_size=2
-        points = find_divergence_points(alignment, runs, min_branch_size=2, p_threshold=1.0)
+        points, _ = find_divergence_points(alignment, runs, min_branch_size=2, q_threshold=1.0)
         assert len(points) == 0
 
     def test_phase_context_populated(self):
@@ -134,7 +132,7 @@ class TestDivergencePoints:
                 _make_run("r2", ["read", "edit"], True),
                 _make_run("r3", ["read", "search"], False),
                 _make_run("r4", ["read", "search"], False)]
-        points = find_divergence_points(alignment, runs, min_branch_size=1, p_threshold=1.0)
+        points, _ = find_divergence_points(alignment, runs, min_branch_size=1, q_threshold=1.0)
         assert len(points) == 1
         assert points[0].phase_context is not None
 
@@ -148,7 +146,7 @@ class TestDivergencePoints:
             level="type",
         )
         runs = [_make_run("r1", ["llm"], None), _make_run("r2", ["tool"], None)]
-        points = find_divergence_points(alignment, runs, min_branch_size=1, p_threshold=1.0)
+        points, _ = find_divergence_points(alignment, runs, min_branch_size=1, q_threshold=1.0)
         assert len(points) == 1
         assert points[0].success_by_value["llm"] is None
         assert points[0].success_by_value["tool"] is None
@@ -168,15 +166,36 @@ class TestDivergencePoints:
                 _make_run("r2", ["x"] * 3, False),
                 _make_run("r3", ["x"] * 3, True),
                 _make_run("r4", ["x"] * 3, False)]
-        points = find_divergence_points(alignment, runs, min_branch_size=1, p_threshold=1.0)
-        # Should be sorted by p_value ascending (most significant first)
-        p_values = [p.p_value or 1.0 for p in points]
-        for i in range(len(p_values) - 1):
-            assert p_values[i] <= p_values[i + 1] + 0.01
+        points, _ = find_divergence_points(alignment, runs, min_branch_size=1, q_threshold=1.0)
+        # Should be sorted by q_value ascending
+        q_values = [p.q_value if p.q_value is not None else (p.p_value or 1.0) for p in points]
+        for i in range(len(q_values) - 1):
+            assert q_values[i] <= q_values[i + 1] + 0.01
+
+    def test_q_value_populated(self):
+        """BH correction sets q_value on divergence points."""
+        alignment = Alignment(
+            run_ids=["r1", "r2", "r3", "r4"],
+            matrix=[
+                ["llm", "judge"],
+                ["llm", "judge"],
+                ["llm", "tool"],
+                ["llm", "tool"],
+            ],
+            level="type",
+        )
+        runs = [_make_run("r1", ["llm", "judge"], True),
+                _make_run("r2", ["llm", "judge"], True),
+                _make_run("r3", ["llm", "tool"], False),
+                _make_run("r4", ["llm", "tool"], False)]
+        points, n_tested = find_divergence_points(alignment, runs, min_branch_size=1, q_threshold=1.0)
+        assert n_tested > 0
+        for p in points:
+            assert p.q_value is not None
 
     def test_empty_alignment(self):
         alignment = Alignment(run_ids=[], matrix=[], level="type")
-        points = find_divergence_points(alignment, [])
+        points, _ = find_divergence_points(alignment, [])
         assert points == []
 
 
@@ -188,7 +207,6 @@ class TestAlignRunsProgressive:
             _make_run("r3", ["llm", "tool", "judge"]),
         ]
         alignment = align_runs(runs)
-        # No gaps expected
         for row in alignment.matrix:
             assert GAP not in row
         assert len(alignment.matrix) == 3
@@ -207,7 +225,6 @@ class TestAlignRunsProgressive:
         alignment = align_runs(runs)
         assert len(alignment.matrix) == 2
         assert len(alignment.matrix[0]) == len(alignment.matrix[1])
-        # r1 should have a gap somewhere
         assert GAP in alignment.matrix[0]
 
     def test_determinism(self):

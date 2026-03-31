@@ -188,7 +188,7 @@ def branch(
     for tid in sorted(mixed_tasks, key=lambda t: -len(mixed_tasks[t])):
         task_runs = mixed_tasks[tid]
         alignment = align_runs(task_runs, level="name")
-        points = find_divergence_points(alignment, task_runs, min_branch_size=1, p_threshold=0.5)
+        points, _ = find_divergence_points(alignment, task_runs, min_branch_size=1, q_threshold=0.5)
 
         n_pass = sum(1 for r in task_runs if r.result.success)
         n_fail = len(task_runs) - n_pass
@@ -242,11 +242,11 @@ def patterns(
     from moirai.analyze.motifs import find_motifs
     from moirai.viz.terminal import print_motifs
 
-    motifs = find_motifs(runs, min_n=min_n, max_n=max_n, min_count=min_count)
+    motifs, n_tested = find_motifs(runs, min_n=min_n, max_n=max_n, min_count=min_count)
 
     known = [r for r in runs if r.result.success is not None]
     baseline = sum(1 for r in known if r.result.success) / len(known) if known else 0.0
-    print_motifs(motifs, baseline, len(runs))
+    print_motifs(motifs, baseline, len(runs), n_tested=n_tested)
 
 
 @app.command()
@@ -413,7 +413,7 @@ def explain(
     # Key divergence — align siblings at name level for fine-grained detail
     if siblings and len(siblings) >= 3:
         alignment = align_runs(siblings, level="name")
-        points = find_divergence_points(alignment, siblings)
+        points, _ = find_divergence_points(alignment, siblings)
 
         if points:
             # Find the divergence point most relevant to this run's outcome

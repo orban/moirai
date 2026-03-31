@@ -5,9 +5,9 @@ discriminate between successful and failing runs.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
+from moirai.analyze.stats import benjamini_hochberg, fishers_exact_2x2
 from moirai.compress import step_enriched_name
 from moirai.schema import Run
 
@@ -22,8 +22,9 @@ class Motif:
     success_rate: float      # success rate of runs with this pattern
     baseline_rate: float     # overall success rate for comparison
     lift: float              # success_rate / baseline_rate (>1 = positive, <1 = negative)
-    p_value: float | None    # Fisher's exact test
+    p_value: float | None    # Fisher's exact test (raw)
     avg_position: float      # average position (0-1 normalized) where the pattern appears
+    q_value: float | None = None  # BH-adjusted p-value
 
     @property
     def display(self) -> str:
@@ -59,22 +60,24 @@ def find_motifs(
     min_n: int = 3,
     max_n: int = 5,
     min_count: int = 3,
-    p_threshold: float = 0.2,
-) -> list[Motif]:
+    q_threshold: float = 0.05,
+) -> tuple[list[Motif], int]:
     """Find step patterns that correlate with success or failure.
 
-    Returns motifs sorted by absolute lift (most discriminative first).
+    Returns (motifs, n_candidates_tested). Motifs are sorted by q-value
+    ascending with effect size as tiebreaker. BH correction is applied
+    internally.
     """
     if not runs:
-        return []
+        return [], 0
 
     # Baseline success rate
     known = [r for r in runs if r.result.success is not None]
     if not known:
-        return []
+        return [], 0
     baseline = sum(1 for r in known if r.result.success) / len(known)
     if baseline == 0.0 or baseline == 1.0:
-        return []  # no variation to explain
+        return [], 0  # no variation to explain
 
     total_success = sum(1 for r in known if r.result.success)
     total_fail = len(known) - total_success
@@ -110,8 +113,8 @@ def find_motifs(
             else:
                 gram_counts[gram] = (s, f + 1)
 
-    # Build motifs with significance testing
-    motifs: list[Motif] = []
+    # Build candidate motifs with raw p-values (no filtering yet)
+    candidates: list[Motif] = []
     for gram, (succ, fail) in gram_counts.items():
         total = succ + fail
         if total < min_count:
@@ -120,19 +123,13 @@ def find_motifs(
         rate = succ / total
         lift = rate / baseline if baseline > 0 else 1.0
 
-        # Fisher's exact: does having this pattern predict outcome?
-        # 2x2 table: [with_pattern_success, with_pattern_fail]
-        #             [without_pattern_success, without_pattern_fail]
         without_s = total_success - succ
         without_f = total_fail - fail
-        p_val = _fishers_exact_2x2(succ, fail, without_s, without_f)
-
-        if p_val is not None and p_val > p_threshold:
-            continue
+        p_val = fishers_exact_2x2(succ, fail, without_s, without_f)
 
         avg_pos = sum(gram_positions.get(gram, [0.0])) / max(len(gram_positions.get(gram, [0.0])), 1)
 
-        motifs.append(Motif(
+        candidates.append(Motif(
             pattern=gram,
             total_runs=total,
             success_runs=succ,
@@ -144,45 +141,16 @@ def find_motifs(
             avg_position=avg_pos,
         ))
 
-    # Sort by absolute deviation from baseline (most discriminative first)
-    motifs.sort(key=lambda m: -abs(m.success_rate - m.baseline_rate))
-    return motifs
+    # Apply BH correction
+    raw_p = [m.p_value for m in candidates]
+    adjusted = benjamini_hochberg(raw_p, q=q_threshold)
+    for motif, qv in zip(candidates, adjusted):
+        motif.q_value = qv
 
+    # Filter by q-value
+    motifs = [m for m in candidates if m.q_value is not None and m.q_value <= q_threshold]
 
-def _fishers_exact_2x2(a: int, b: int, c: int, d: int) -> float | None:
-    """Fisher's exact test for a 2x2 contingency table [[a,b],[c,d]].
+    # Sort by q-value ascending, then by effect size as tiebreaker
+    motifs.sort(key=lambda m: (m.q_value if m.q_value is not None else 1.0, -abs(m.success_rate - m.baseline_rate)))
 
-    Returns p-value or None if not computable.
-    """
-    n = a + b + c + d
-    if n == 0:
-        return None
-
-    row1 = a + b
-    col1 = a + c
-
-    observed_p = _hypergeom_pmf(a, n, col1, row1)
-    if observed_p is None:
-        return None
-
-    p_value = 0.0
-    for x in range(max(0, row1 + col1 - n), min(row1, col1) + 1):
-        px = _hypergeom_pmf(x, n, col1, row1)
-        if px is not None and px <= observed_p + 1e-10:
-            p_value += px
-
-    return min(p_value, 1.0)
-
-
-def _hypergeom_pmf(k: int, N: int, K: int, n: int) -> float | None:
-    if k < max(0, n + K - N) or k > min(n, K):
-        return 0.0
-    try:
-        log_p = (
-            math.lgamma(K + 1) - math.lgamma(k + 1) - math.lgamma(K - k + 1)
-            + math.lgamma(N - K + 1) - math.lgamma(n - k + 1) - math.lgamma(N - K - n + k + 1)
-            - math.lgamma(N + 1) + math.lgamma(n + 1) + math.lgamma(N - n + 1)
-        )
-        return math.exp(log_p)
-    except (ValueError, OverflowError):
-        return None
+    return motifs, len(candidates)
