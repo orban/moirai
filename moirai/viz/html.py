@@ -555,13 +555,13 @@ def _build_dendrogram_heatmap_svg(
 # ---------------------------------------------------------------------------
 
 def _run_llm_analysis(task_id: str, runs: list[Run]) -> str | None:
-    """Run LLM analysis on a task's divergence. Returns markdown string or None."""
+    """Run LLM analysis via claude CLI (Claude Code)."""
+    import shutil
+    import subprocess
     import sys
 
-    try:
-        import anthropic
-    except ImportError:
-        print("  skipping analysis: pip install anthropic && export ANTHROPIC_API_KEY=...", file=sys.stderr)
+    if not shutil.which("claude"):
+        print("  skipping analysis: claude CLI not found", file=sys.stderr)
         return None
 
     from moirai.analyze.explain import explain_task
@@ -570,17 +570,22 @@ def _run_llm_analysis(task_id: str, runs: list[Run]) -> str | None:
     if not prompt or "no mixed outcomes" in prompt:
         return None
 
+    print(f"  analyzing {task_id}...", file=sys.stderr)
     try:
-        client = anthropic.Anthropic()
-        print(f"  analyzing {task_id}...", file=sys.stderr)
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
+        result = subprocess.run(
+            ["claude", "-p", prompt],
+            capture_output=True, text=True, timeout=120,
         )
-        return response.content[0].text
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        if result.stderr:
+            print(f"  warning: {result.stderr[:200]}", file=sys.stderr)
+        return None
+    except subprocess.TimeoutExpired:
+        print(f"  warning: analysis timed out for {task_id}", file=sys.stderr)
+        return None
     except Exception as e:
-        print(f"  warning: LLM analysis failed for {task_id}: {e}", file=sys.stderr)
+        print(f"  warning: analysis failed for {task_id}: {e}", file=sys.stderr)
         return None
 
 
