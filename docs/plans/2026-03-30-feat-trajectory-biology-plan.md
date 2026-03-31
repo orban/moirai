@@ -43,40 +43,40 @@ Five staged implementation adding gapped motifs, positional MI, domain architect
 
 Consolidate duplicated statistical primitives from `motifs.py:152-189` and `divergence.py:138-245` into a shared module. Add BH correction and permutation test.
 
-- [ ] `fishers_exact_2x2()`, `hypergeom_pmf()`, `log_comb()` — consolidated from duplicates
-- [ ] `chi_squared_test()`, `chi2_sf()` — from `divergence.py`
-- [ ] `benjamini_hochberg(p_values, q=0.05)` — new, ~20 lines
-- [ ] `permutation_fdr(membership, outcomes, q_threshold, n_permutations, seed)` — new, uses vectorized chi-squared approximation inside the loop (not Fisher's exact), numpy `argsort`-based vectorized BH
+- [x] `fishers_exact_2x2()`, `hypergeom_pmf()`, `log_comb()` — consolidated from duplicates
+- [x] `chi_squared_test()`, `chi2_sf()` — from `divergence.py`
+- [x] `benjamini_hochberg(p_values, q=0.05)` — new, ~20 lines
+- [x] `permutation_fdr(membership, outcomes, q_threshold, n_permutations, seed)` — new, uses vectorized chi-squared approximation inside the loop (not Fisher's exact), numpy `argsort`-based vectorized BH
 
 ### 1.2 Wire BH into existing analysis
 
-- [ ] `find_motifs()`: replace inline Fisher's with `stats.*`, apply BH, filter by q-value, sort by `(q_value, -abs(success_rate - baseline_rate))`
-- [ ] `find_divergence_points()`: replace inline Fisher's/chi-squared with `stats.*`, apply BH, set `q_value` on each `DivergencePoint`
-- [ ] Add `q_value: float | None = None` to `DivergencePoint` in `schema.py`
-- [ ] Remove all duplicate implementations from `motifs.py` and `divergence.py`
+- [x] `find_motifs()`: replace inline Fisher's with `stats.*`, apply BH, filter by q-value, sort by `(q_value, -abs(success_rate - baseline_rate))`
+- [x] `find_divergence_points()`: replace inline Fisher's/chi-squared with `stats.*`, apply BH, set `q_value` on each `DivergencePoint`
+- [x] Add `q_value: float | None = None` to `DivergencePoint` in `schema.py`
+- [x] Remove all duplicate implementations from `motifs.py` and `divergence.py`
 
 ### 1.3 Transition UX
 
-- [ ] When BH drops all results, print: "N raw hits at p<0.2, 0 survived correction at q=0.05"
-- [ ] Apply to `print_motifs()` and `print_divergence()` / `print_cluster_divergence()`
+- [x] When BH drops all results, print: "N raw hits at p<0.2, 0 survived correction at q=0.05"
+- [x] Apply to `print_motifs()` and `print_divergence()` / `print_cluster_divergence()`
 
 ### 1.4 Add `--permutation-test` to `patterns` command
 
-- [ ] `--permutation-test N` option on `moirai patterns`
-- [ ] Pre-compute boolean membership matrix, run vectorized permutation loop
-- [ ] Print motifs as usual, then append diagnostic: "Empirical FDR: X% (N permutations, Y mean discoveries vs Z actual)"
+- [x] `--permutation-test N` option on `moirai patterns`
+- [x] Pre-compute boolean membership matrix, run vectorized permutation loop
+- [x] Print motifs as usual, then append diagnostic: "Empirical FDR: X% (N permutations, Y mean discoveries vs Z actual)"
 
 ### 1.5 Tests
 
 **`tests/test_stats.py`:**
-- [ ] BH: empty, single, known reference dataset, None handling
-- [ ] Fisher's exact: characterization tests matching existing output
-- [ ] Permutation FDR: deterministic with fixed seed
+- [x] BH: empty, single, known reference dataset, None handling
+- [x] Fisher's exact: characterization tests matching existing output
+- [x] Permutation FDR: deterministic with fixed seed
 
 **Update existing tests:**
-- [ ] `test_motifs.py`: verify `q_value` set, BH filters stricter than raw p
-- [ ] `test_divergence.py`: verify `DivergencePoint.q_value` set
-- [ ] Characterization test: document what changed
+- [x] `test_motifs.py`: verify `q_value` set, BH filters stricter than raw p
+- [x] `test_divergence.py`: verify `DivergencePoint.q_value` set
+- [x] Characterization test: document what changed
 
 ---
 
