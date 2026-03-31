@@ -108,11 +108,18 @@ Compared to failing runs in this cluster (105):
 
 This run spent 76% of its steps exploring (reading, searching) before making 3 targeted edits. The 105 failing runs in the same cluster averaged the same length — the difference wasn't effort, it was strategy.
 
-### HTML dashboard
+### HTML report
 
-`moirai branch --html report.html` generates an analysis dashboard:
+`moirai branch --html report.html` generates a per-task narrative report. Each task with mixed outcomes gets a finding explaining what happened at the fork, with full trajectories showing the actual files and commands:
 
-![moirai dashboard](docs/images/dashboard.png)
+![moirai report](docs/images/dashboard_top.png)
+
+<details>
+<summary>Full report</summary>
+
+![moirai full report](docs/images/dashboard.png)
+
+</details>
 
 ## What you can do with this
 
