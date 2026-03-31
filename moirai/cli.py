@@ -231,6 +231,7 @@ def patterns(
     min_n: int = typer.Option(3, help="Minimum pattern length"),
     max_n: int = typer.Option(5, help="Maximum pattern length"),
     min_count: int = typer.Option(3, help="Minimum runs containing pattern"),
+    permutation_test: int | None = typer.Option(None, "--permutation-test", help="Run N permutations to estimate empirical FDR"),
     strict: bool = typer.Option(False, help="Treat warnings as errors"),
     model: str | None = typer.Option(None, help="Filter by model"),
     harness: str | None = typer.Option(None, help="Filter by harness"),
@@ -247,6 +248,36 @@ def patterns(
     known = [r for r in runs if r.result.success is not None]
     baseline = sum(1 for r in known if r.result.success) / len(known) if known else 0.0
     print_motifs(motifs, baseline, len(runs), n_tested=n_tested)
+
+    if permutation_test is not None and motifs:
+        import numpy as np
+        from moirai.analyze.motifs import _filtered_names, _extract_ngrams
+        from moirai.analyze.stats import permutation_fdr
+
+        # Build boolean membership matrix (patterns × runs)
+        patterns = [m.pattern for m in motifs]
+        run_grams: list[set[tuple[str, ...]]] = []
+        for run in known:
+            names = _filtered_names(run)
+            grams = {g for g, _ in _extract_ngrams(names, min_n, max_n)}
+            run_grams.append(grams)
+
+        membership = np.array(
+            [[pat in grams for grams in run_grams] for pat in patterns],
+            dtype=bool,
+        )
+        outcomes = np.array([r.result.success for r in known], dtype=bool)
+
+        console.print(f"\n[bold]Permutation test[/bold] ({permutation_test} permutations)")
+        fdr, discoveries = permutation_fdr(
+            membership, outcomes,
+            n_permutations=permutation_test,
+        )
+        mean_null = sum(discoveries) / len(discoveries) if discoveries else 0
+        console.print(
+            f"  Empirical FDR: [bold]{fdr:.1%}[/bold] "
+            f"({mean_null:.1f} mean null discoveries vs {len(motifs)} actual)"
+        )
 
 
 @app.command()
