@@ -3,8 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from moirai.analyze.motifs import Motif
-from moirai.schema import DivergencePoint
+from moirai.schema import DivergencePoint, Motif
 
 
 @dataclass

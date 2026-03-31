@@ -121,6 +121,44 @@ class ClusterResult:
     labels: dict[str, int]  # run_id -> cluster_id
 
 
+@dataclass
+class Motif:
+    """A recurring contiguous step pattern with outcome correlation."""
+    pattern: tuple[str, ...]
+    total_runs: int          # runs containing this pattern
+    success_runs: int        # successful runs containing it
+    fail_runs: int           # failing runs containing it
+    success_rate: float      # success rate of runs with this pattern
+    baseline_rate: float     # overall success rate for comparison
+    lift: float              # success_rate / baseline_rate (>1 = positive, <1 = negative)
+    p_value: float | None    # Fisher's exact test (raw)
+    avg_position: float      # average position (0-1 normalized) where the pattern appears
+    q_value: float | None = None  # BH-adjusted p-value
+
+    @property
+    def display(self) -> str:
+        return " → ".join(self.pattern)
+
+
+@dataclass
+class GappedMotif:
+    """An ordered subsequence pattern with flexible gaps between anchors."""
+    anchors: tuple[str, ...]
+    total_runs: int
+    success_runs: int
+    fail_runs: int
+    success_rate: float
+    baseline_rate: float
+    lift: float
+    p_value: float | None
+    q_value: float | None = None
+    avg_position: float = 0.0
+
+    @property
+    def display(self) -> str:
+        return " → ... → ".join(self.anchors)
+
+
 # --- Sequence extraction (analysis primitives, not normalization) ---
 
 def step_type_sequence(run: Run) -> list[str]:
