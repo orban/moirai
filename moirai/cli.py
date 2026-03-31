@@ -188,7 +188,7 @@ def branch(
     for tid in sorted(mixed_tasks, key=lambda t: -len(mixed_tasks[t])):
         task_runs = mixed_tasks[tid]
         alignment = align_runs(task_runs, level="name")
-        points = find_divergence_points(alignment, task_runs, min_branch_size=1, p_threshold=0.5)
+        points, _ = find_divergence_points(alignment, task_runs, min_branch_size=1, q_threshold=0.5)
 
         n_pass = sum(1 for r in task_runs if r.result.success)
         n_fail = len(task_runs) - n_pass
@@ -203,7 +203,7 @@ def branch(
             continue
 
         for point in points[:3]:
-            p_str = f"p={point.p_value:.3f}" if point.p_value is not None else ""
+            p_str = f"q={point.q_value:.3f}" if getattr(point, "q_value", None) is not None else (f"p={point.p_value:.3f}" if point.p_value is not None else "")
             console.print(f"  [bold]Position {point.column}[/bold] ({p_str})")
             if point.phase_context:
                 console.print(f"  [dim]{point.phase_context}[/dim]")
@@ -231,6 +231,9 @@ def patterns(
     min_n: int = typer.Option(3, help="Minimum pattern length"),
     max_n: int = typer.Option(5, help="Maximum pattern length"),
     min_count: int = typer.Option(3, help="Minimum runs containing pattern"),
+    gapped: bool = typer.Option(False, help="Also discover gapped (ordered subsequence) patterns"),
+    max_length: int = typer.Option(3, "--max-length", help="Max gapped pattern length (default 3, use 4 for deeper search)"),
+    permutation_test: int | None = typer.Option(None, "--permutation-test", help="Run N permutations to estimate empirical FDR"),
     strict: bool = typer.Option(False, help="Treat warnings as errors"),
     model: str | None = typer.Option(None, help="Filter by model"),
     harness: str | None = typer.Option(None, help="Filter by harness"),
@@ -239,14 +242,63 @@ def patterns(
     """Find step patterns that predict success or failure."""
     runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
 
-    from moirai.analyze.motifs import find_motifs
+    from moirai.analyze.motifs import find_gapped_motifs, find_motifs
     from moirai.viz.terminal import print_motifs
 
-    motifs = find_motifs(runs, min_n=min_n, max_n=max_n, min_count=min_count)
+    motifs, n_tested = find_motifs(runs, min_n=min_n, max_n=max_n, min_count=min_count)
+
+    all_results: list = list(motifs)
+    total_tested = n_tested
+
+    if gapped:
+        gapped_motifs, gapped_tested = find_gapped_motifs(runs, max_length=max_length, min_count=min_count)
+        all_results.extend(gapped_motifs)
+        total_tested += gapped_tested
+        # Re-sort merged results by q-value
+        all_results.sort(key=lambda m: (m.q_value if m.q_value is not None else 1.0, -abs(m.success_rate - m.baseline_rate)))
 
     known = [r for r in runs if r.result.success is not None]
     baseline = sum(1 for r in known if r.result.success) / len(known) if known else 0.0
-    print_motifs(motifs, baseline, len(runs))
+    print_motifs(all_results, baseline, len(runs), n_tested=total_tested)
+
+    if permutation_test is not None and all_results:
+        import numpy as np
+        from moirai.analyze.motifs import _extract_ngrams, _filtered_names
+        from moirai.analyze.stats import permutation_fdr
+
+        # Build boolean membership matrix (patterns × runs)
+        # For contiguous motifs, check n-gram membership
+        # For gapped motifs, check ordered subsequence membership
+        from moirai.analyze.motifs import _is_subsequence
+        from moirai.schema import GappedMotif
+
+        run_names: list[list[str]] = [_filtered_names(run) for run in known]
+        run_grams: list[set[tuple[str, ...]]] = [
+            {g for g, _ in _extract_ngrams(names, min_n, max_n)}
+            for names in run_names
+        ]
+
+        rows: list[list[bool]] = []
+        for m in all_results:
+            if isinstance(m, GappedMotif):
+                row = [_is_subsequence(m.anchors, tuple(names)) for names in run_names]
+            else:
+                row = [m.pattern in grams for grams in run_grams]
+            rows.append(row)
+
+        membership = np.array(rows, dtype=bool)
+        outcomes = np.array([r.result.success for r in known], dtype=bool)
+
+        console.print(f"\n[bold]Permutation test[/bold] ({permutation_test} permutations)")
+        fdr, discoveries = permutation_fdr(
+            membership, outcomes,
+            n_permutations=permutation_test,
+        )
+        mean_null = sum(discoveries) / len(discoveries) if discoveries else 0
+        console.print(
+            f"  Empirical FDR: [bold]{fdr:.1%}[/bold] "
+            f"({mean_null:.1f} mean null discoveries vs {len(all_results)} actual)"
+        )
 
 
 @app.command()
@@ -413,7 +465,7 @@ def explain(
     # Key divergence — align siblings at name level for fine-grained detail
     if siblings and len(siblings) >= 3:
         alignment = align_runs(siblings, level="name")
-        points = find_divergence_points(alignment, siblings)
+        points, _ = find_divergence_points(alignment, siblings)
 
         if points:
             # Find the divergence point most relevant to this run's outcome

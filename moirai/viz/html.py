@@ -765,7 +765,7 @@ def _build_dendrogram_heatmap(
 def _build_patterns_table(runs: list[Run]) -> str:
     from moirai.analyze.motifs import find_motifs
 
-    motifs = find_motifs(runs, min_n=3, max_n=5, min_count=3)
+    motifs, _ = find_motifs(runs, min_n=3, max_n=5, min_count=3)
     known = [r for r in runs if r.result.success is not None]
     if not known:
         return '<p style="color:var(--text-muted)">No outcome data.</p>'
