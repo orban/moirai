@@ -30,7 +30,7 @@ class TestBuildDendrogramHeatmap:
         assert "<path" in svg  # dendrogram bracket paths
         assert "#3fb950" in svg  # green outcome strip (pass)
         assert "#f85149" in svg  # red outcome strip (fail)
-        assert "<title>" in svg  # heatmap tooltips
+        assert "showTip" in svg  # interactive tooltips on cells
 
     def test_one_run_no_dendrogram(self):
         """1 run should render heatmap without dendrogram paths."""
