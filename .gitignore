@@ -13,4 +13,5 @@ venv/
 htmlcov/
 *.html
 !examples/**/*.html
+!moirai/viz/templates/*.html
 .agent-workspace/

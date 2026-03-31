@@ -91,8 +91,28 @@ class DivergencePoint:
     success_by_value: dict[str, float | None]
     # Added in v1: quality metrics
     p_value: float | None = None          # Fisher's exact test: does branch predict outcome?
+    q_value: float | None = None          # BH-adjusted p-value
     min_branch_size: int = 0              # smallest branch count — low = unstable
     phase_context: str | None = None      # e.g. "explore→[modify] vs explore→[explore]"
+
+
+@dataclass
+class SplitDivergence:
+    """A divergence derived from a dendrogram split."""
+    node_id: int                          # internal node in linkage matrix
+    left_runs: list[str]                  # run_ids in left subtree
+    right_runs: list[str]                 # run_ids in right subtree
+    merge_distance: float                 # linkage distance at this split
+    column: int                           # most discriminating alignment column
+    separation: float                     # 0-1: how well the column separates the subtrees
+    left_values: dict[str, int]           # value_counts in left subtree at column
+    right_values: dict[str, int]          # value_counts in right subtree at column
+    left_success_rate: float | None       # pass rate of left subtree
+    right_success_rate: float | None      # pass rate of right subtree
+    p_value: float | None = None          # Fisher's: does this split predict outcome?
+    # SVG coordinates (filled by renderer)
+    svg_x: float = 0.0
+    svg_y: float = 0.0
 
 
 @dataclass
@@ -118,6 +138,44 @@ class ClusterInfo:
 class ClusterResult:
     clusters: list[ClusterInfo]
     labels: dict[str, int]  # run_id -> cluster_id
+
+
+@dataclass
+class Motif:
+    """A recurring contiguous step pattern with outcome correlation."""
+    pattern: tuple[str, ...]
+    total_runs: int          # runs containing this pattern
+    success_runs: int        # successful runs containing it
+    fail_runs: int           # failing runs containing it
+    success_rate: float      # success rate of runs with this pattern
+    baseline_rate: float     # overall success rate for comparison
+    lift: float              # success_rate / baseline_rate (>1 = positive, <1 = negative)
+    p_value: float | None    # Fisher's exact test (raw)
+    avg_position: float      # average position (0-1 normalized) where the pattern appears
+    q_value: float | None = None  # BH-adjusted p-value
+
+    @property
+    def display(self) -> str:
+        return " → ".join(self.pattern)
+
+
+@dataclass
+class GappedMotif:
+    """An ordered subsequence pattern with flexible gaps between anchors."""
+    anchors: tuple[str, ...]
+    total_runs: int
+    success_runs: int
+    fail_runs: int
+    success_rate: float
+    baseline_rate: float
+    lift: float
+    p_value: float | None
+    q_value: float | None = None
+    avg_position: float = 0.0
+
+    @property
+    def display(self) -> str:
+        return " → ... → ".join(self.anchors)
 
 
 # --- Sequence extraction (analysis primitives, not normalization) ---

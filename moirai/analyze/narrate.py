@@ -19,6 +19,7 @@ class StepDetail:
     enriched_name: str
     detail: str  # file name, command, or pattern
     is_fork: bool = False
+    reasoning: str | None = None
 
 
 @dataclass
@@ -30,6 +31,7 @@ class BranchExample:
     representative_run_id: str
     steps: list[StepDetail]       # full trajectory with fork marked
     fork_position: int            # which step index is the fork
+    reasoning: str | None = None  # agent reasoning at the fork step
 
 
 @dataclass
@@ -134,13 +136,25 @@ def _build_branches(
             detail = _step_detail(step)
             is_fork = (filtered_idx == fork_step_idx)
 
+            reasoning = None
+            if is_fork:
+                reasoning = step.output.get("reasoning") if step.output else None
+
             steps.append(StepDetail(
                 position=filtered_idx,
                 enriched_name=enriched,
                 detail=detail,
                 is_fork=is_fork,
+                reasoning=reasoning,
             ))
             filtered_idx += 1
+
+        # Extract fork reasoning for the branch-level field
+        fork_reasoning = None
+        for s in steps:
+            if s.is_fork and s.reasoning:
+                fork_reasoning = s.reasoning
+                break
 
         branches.append(BranchExample(
             value=value,
@@ -149,6 +163,7 @@ def _build_branches(
             representative_run_id=rep_run.run_id,
             steps=steps,
             fork_position=fork_step_idx,
+            reasoning=fork_reasoning,
         ))
 
     return branches
