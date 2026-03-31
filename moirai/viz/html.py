@@ -66,17 +66,18 @@ def write_branch_html(
             section += f'<h2 style="margin-bottom:2px">{tid}</h2>'
             section += f'<div style="font-size:12px;color:#888;margin-bottom:12px">{len(task_runs)} runs ({n_pass}P/{n_fail}F), {n_cols} aligned positions</div>'
 
-            # Fork cards
-            if findings:
-                for finding in findings:
-                    section += _build_fork_card(finding)
-            else:
-                section += '<div style="color:#888;font-size:13px">No significant divergence points in this task.</div>'
+            # Clustering interpretation
+            section += _clustering_interpretation(task_alignment, task_runs)
 
-            # Dendrogram + heatmap as supporting evidence
-            section += f'<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:#888">Show aligned trajectories</summary>'
-            section += f'<div style="margin-top:8px">{_build_dendrogram_heatmap(task_alignment, task_runs, task_points)}</div>'
-            section += '</details>'
+            # Dendrogram + heatmap (primary view, numbered divergence markers)
+            section += f'<div style="margin-top:8px;overflow-x:auto">{_build_dendrogram_heatmap(task_alignment, task_runs, task_points)}</div>'
+
+            # Fork cards below with matching numbers
+            if findings:
+                section += '<div style="margin-top:16px">'
+                for i, finding in enumerate(findings, 1):
+                    section += _build_fork_card(finding, number=i)
+                section += '</div>'
 
             section += '</div>'
             task_sections.append(section)
@@ -131,14 +132,75 @@ def write_branch_html(
     return path
 
 
+# --- Clustering interpretation ---
+
+def _clustering_interpretation(alignment: Alignment, runs: list[Run]) -> str:
+    """One-line narrative about whether the dendrogram separates pass from fail."""
+    if len(runs) < 3:
+        return ""
+
+    success_map = {r.run_id: r.result.success for r in runs}
+    n_pass = sum(1 for r in runs if r.result.success)
+    n_fail = len(runs) - n_pass
+
+    if n_pass == 0 or n_fail == 0:
+        return ""
+
+    # Compute dendrogram to get leaf order
+    try:
+        from moirai.analyze.align import distance_matrix
+        from scipy.cluster.hierarchy import linkage, dendrogram as scipy_dendrogram
+
+        condensed = distance_matrix(runs, level="name")
+        if len(condensed) == 0:
+            return ""
+        Z = linkage(condensed, method="average")
+        result = scipy_dendrogram(Z, no_plot=True)
+        leaves = result["leaves"]
+    except Exception:
+        return ""
+
+    # Check if pass/fail cluster: find the split point that best separates outcomes
+    # Walk through leaf order and find the longest contiguous run of same-outcome
+    outcomes = [success_map.get(alignment.run_ids[i]) for i in leaves]
+    best_purity = 0.0
+    for split in range(1, len(outcomes)):
+        left = outcomes[:split]
+        right = outcomes[split:]
+        left_pass = sum(1 for o in left if o is True)
+        right_pass = sum(1 for o in right if o is True)
+        # Purity: how well does this split separate pass from fail?
+        left_purity = max(left_pass, len(left) - left_pass) / len(left)
+        right_purity = max(right_pass, len(right) - right_pass) / len(right)
+        avg_purity = (left_purity * len(left) + right_purity * len(right)) / len(outcomes)
+        if avg_purity > best_purity:
+            best_purity = avg_purity
+
+    if best_purity >= 0.9:
+        msg = "Trajectory structure strongly predicts outcome — pass and fail runs cluster separately."
+        color = "#2d7d2d"
+    elif best_purity >= 0.75:
+        msg = "Some clustering by outcome — similar trajectories tend to have similar results."
+        color = "#b07800"
+    else:
+        msg = "No clear outcome clustering — divergence is at individual decision points, not overall trajectory structure."
+        color = "#888"
+
+    return f'<div style="font-size:12px;color:{color};margin-bottom:4px;font-style:italic">{msg}</div>'
+
+
 # --- Fork cards ---
 
-def _build_fork_card(finding) -> str:
+def _build_fork_card(finding, number: int | None = None) -> str:
     """Render a fork card for one divergence point."""
     p_str = f"p={finding.p_value:.3f}" if finding.p_value is not None else ""
 
+    num_badge = ""
+    if number is not None:
+        num_badge = f'<span style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;background:#e15759;color:white;border-radius:50%;font-size:11px;font-weight:700;margin-right:6px">{number}</span>'
+
     card = f'<div style="border-left:3px solid #4e79a7;padding:8px 14px;margin:10px 0;background:#f8fafc">'
-    card += f'<div style="font-size:14px;font-weight:600;color:#222;margin-bottom:4px">{finding.summary}</div>'
+    card += f'<div style="font-size:14px;font-weight:600;color:#222;margin-bottom:4px">{num_badge}{finding.summary}</div>'
     if p_str:
         card += f'<div style="font-size:11px;color:#aaa;margin-bottom:8px">{p_str}</div>'
 
@@ -316,28 +378,38 @@ def _build_dendrogram_heatmap(
     gap = 4
     heatmap_x = dendro_w + gap + outcome_w + gap + label_w
     svg_w = heatmap_x + n_cols * cell_w + 10
-    svg_h = n_runs * cell_h + 20  # extra for tick marks
+    marker_h = 18  # space for numbered markers above the heatmap
+    svg_h = n_runs * cell_h + marker_h + 4
 
     parts = [f'<svg width="{svg_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg" '
              f'style="font-family:SF Mono,Menlo,monospace;font-size:9px">']
 
-    # Dendrogram paths
+    # Offset everything down by marker_h to make room for markers
+    heatmap_y_offset = marker_h
+
+    # Dendrogram paths (shifted down)
     if dendro_paths:
-        parts.append(f'<g class="dendrogram">')
+        parts.append(f'<g class="dendrogram" transform="translate(0,{heatmap_y_offset})">')
         parts.extend(dendro_paths)
         parts.append('</g>')
 
-    # Divergence tick marks on column header
-    div_columns = {p.column for p in points}
-    for col in div_columns:
-        if col < n_cols:
-            x = heatmap_x + col * cell_w + cell_w // 2
-            parts.append(f'<line x1="{x}" y1="0" x2="{x}" y2="{svg_h}" stroke="#e15759" stroke-width="0.5" opacity="0.3"/>')
+    # Numbered divergence markers above the heatmap columns
+    div_columns: dict[int, int] = {}  # column -> marker number
+    for i, p in enumerate(points):
+        if p.column < n_cols:
+            div_columns[p.column] = i + 1
+    for col, num in div_columns.items():
+        x = heatmap_x + col * cell_w + cell_w // 2
+        # Vertical guide line
+        parts.append(f'<line x1="{x}" y1="{marker_h - 2}" x2="{x}" y2="{svg_h}" stroke="#e15759" stroke-width="0.5" opacity="0.25"/>')
+        # Numbered circle
+        parts.append(f'<circle cx="{x}" cy="{marker_h // 2}" r="7" fill="#e15759"/>')
+        parts.append(f'<text x="{x}" y="{marker_h // 2 + 3}" text-anchor="middle" fill="white" font-size="9" font-weight="700">{num}</text>')
 
     # Rows in dendrogram leaf order
     for row_idx, orig_idx in enumerate(leaf_order):
         rid = alignment.run_ids[orig_idx]
-        y = row_idx * cell_h
+        y = heatmap_y_offset + row_idx * cell_h
 
         # Outcome strip
         s = success_map.get(rid)
