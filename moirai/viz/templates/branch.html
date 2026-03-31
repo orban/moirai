@@ -8,119 +8,91 @@
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <style>
   :root {
-    --bg: #0d1117;
-    --surface: #161b22;
-    --surface-raised: #1c2128;
-    --border: #30363d;
-    --text: #c9d1d9;
-    --text-muted: #8b949e;
-    --text-bright: #e6edf3;
-    --accent: #d29922;
-    --success: #3fb950;
-    --failure: #f85149;
+    --bg: #0d1117; --surface: #161b22; --surface-raised: #1c2128;
+    --border: #30363d; --text: #c9d1d9; --text-muted: #8b949e; --text-bright: #e6edf3;
+    --accent: #d29922; --success: #3fb950; --failure: #f85149;
     --mono: 'IBM Plex Mono', 'SF Mono', Menlo, monospace;
     --sans: 'Outfit', -apple-system, sans-serif;
   }
   * { box-sizing: border-box; }
   body { font-family: var(--mono); margin: 0; padding: 0; background: var(--bg); color: var(--text); }
+  [x-cloak] { display: none !important; }
 
-  /* Header */
   .header { padding: 32px 40px 24px; border-bottom: 1px solid var(--border); }
   .header h1 { font-family: var(--sans); font-size: 20px; font-weight: 700; color: var(--text-bright); margin: 0 0 2px; letter-spacing: -0.3px; }
   .header .subtitle { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1.5px; }
 
-  /* Stats bar */
   .stats-bar { display: flex; gap: 40px; padding: 16px 40px; border-bottom: 1px solid var(--border); background: var(--surface); }
   .stat { display: flex; align-items: baseline; gap: 6px; }
   .stat-value { font-family: var(--sans); font-size: 22px; font-weight: 700; color: var(--text-bright); }
   .stat-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; }
 
-  /* Legend */
   .legend-bar { display: flex; flex-wrap: wrap; gap: 12px; padding: 10px 40px; border-bottom: 1px solid var(--border); background: var(--surface); position: sticky; top: 0; z-index: 10; }
   .legend-item { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--text-muted); }
   .legend-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
 
   .content { padding: 20px 40px; }
 
-  /* Task panels */
   .task-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 20px; overflow: hidden; }
   .task-header { padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
   .task-name { font-family: var(--sans); font-size: 14px; font-weight: 600; color: var(--text-bright); }
   .task-meta { font-size: 11px; color: var(--text-muted); display: flex; gap: 8px; align-items: center; }
-  .pass-count { color: var(--success); font-weight: 600; }
-  .fail-count { color: var(--failure); font-weight: 600; }
-  .cluster-interpretation { padding: 8px 20px 0; font-size: 11px; font-style: italic; }
 
-  /* Heatmap container */
+  .interpretation { padding: 8px 20px 0; font-size: 11px; font-style: italic; }
   .heatmap-container { padding: 16px 20px; overflow-x: auto; }
 
-  /* SVG row hover */
+  /* Heatmap SVG */
   .heatmap-row { transition: opacity 0.08s; }
   svg:hover .heatmap-row { opacity: 0.4; }
   svg:hover .heatmap-row:hover { opacity: 1; }
 
-  /* Fork cards */
-  .fork-cards { padding: 0 20px 16px; }
-  .fork-card {
-    background: var(--surface-raised); border: 1px solid var(--border); border-radius: 6px;
-    padding: 12px 16px; margin-top: 12px;
-    transition: border-color 0.2s, box-shadow 0.2s;
-  }
-  .fork-card.highlighted {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent), 0 0 16px rgba(210,153,34,0.12);
-  }
-  .fork-card-header { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
-  .fork-number {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 20px; height: 20px; background: var(--accent); color: var(--bg);
-    border-radius: 50%; font-size: 11px; font-weight: 700; flex-shrink: 0; margin-top: 1px;
-    cursor: pointer; transition: transform 0.1s;
-  }
-  .fork-number:hover { transform: scale(1.15); }
-  .fork-summary { font-size: 12px; color: var(--text); line-height: 1.4; }
-  .fork-pvalue { font-size: 10px; color: var(--text-muted); margin-left: 28px; }
+  /* Comparisons */
+  .comparisons { padding: 0 20px 16px; }
+  .comparison { background: var(--surface-raised); border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin-top: 12px; transition: border-color 0.2s, box-shadow 0.2s; }
+  .comparison.highlighted { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 16px rgba(210,153,34,0.12); }
+  .comp-header { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+  .comp-number { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; background: var(--accent); color: var(--bg); border-radius: 50%; font-size: 11px; font-weight: 700; flex-shrink: 0; cursor: pointer; transition: transform 0.1s; }
+  .comp-number:hover { transform: scale(1.15); }
+  .comp-meta { font-size: 10px; color: var(--text-muted); margin-left: 28px; margin-bottom: 8px; }
 
-  /* Branches */
-  .branch { margin: 8px 0; padding: 8px 12px; border-radius: 4px; border-left: 3px solid; }
-  .branch-success { border-color: var(--success); background: rgba(63, 185, 80, 0.06); }
-  .branch-failure { border-color: var(--failure); background: rgba(248, 81, 73, 0.06); }
-  .branch-mixed { border-color: var(--accent); background: rgba(210, 153, 34, 0.06); }
-  .branch-header { font-size: 12px; margin-bottom: 4px; }
-  .branch-rate { font-weight: 600; }
-  .branch-trajectory { font-size: 10px; color: var(--text-muted); line-height: 1.7; margin-top: 4px; }
-  .fork-step { background: var(--accent); color: var(--bg); padding: 1px 4px; border-radius: 2px; font-weight: 600; }
-  .branch-reasoning { font-size: 10px; color: var(--text-muted); font-style: italic; margin-top: 4px; padding: 4px 8px; background: rgba(255,255,255,0.03); border-radius: 3px; }
-  .branch-run-id { font-size: 9px; color: #484f58; margin-top: 3px; }
+  .narrative { font-size: 12px; color: var(--text); line-height: 1.5; margin: 8px 0; }
+  .reasoning-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0; }
+  .reasoning-box { font-size: 10px; color: var(--text-muted); font-style: italic; padding: 6px 10px; border-left: 2px solid; border-radius: 3px; }
+  .reasoning-box.pass { border-color: var(--success); background: rgba(63,185,80,0.06); }
+  .reasoning-box.fail { border-color: var(--failure); background: rgba(248,81,73,0.06); }
+  .reasoning-label { font-weight: 600; font-style: normal; }
+
+  /* Diff table */
+  .diff-table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 12px; }
+  .diff-table th { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); font-size: 10px; }
+  .diff-table td { padding: 2px 8px; border-left: 3px solid transparent; }
+  .diff-table tr.match td { color: var(--text-muted); }
+  .diff-table tr.diff td { border-left-color: rgba(210,153,34,0.3); background: rgba(210,153,34,0.04); color: var(--text-bright); }
+  .diff-table tr.first-div td { border-left-color: var(--accent); background: rgba(210,153,34,0.08); }
+  .diff-table .gap { color: var(--border); }
+  .diff-table .detail { color: #484f58; }
 
   /* Patterns */
   .patterns-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 20px; overflow: hidden; }
   .patterns-panel h2 { font-family: var(--sans); font-size: 14px; font-weight: 600; color: var(--text-bright); padding: 14px 20px; margin: 0; border-bottom: 1px solid var(--border); }
   .patterns-body { padding: 12px 20px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th { text-align: left; padding: 6px 8px; color: var(--text-muted); font-weight: 500; border-bottom: 1px solid var(--border); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
-  td { padding: 6px 8px; border-bottom: 1px solid rgba(48,54,61,0.5); }
-  tr.positive td { background: rgba(63,185,80,0.04); }
-  tr.negative td { background: rgba(248,81,73,0.04); }
-  .success { color: var(--success); }
-  .failure { color: var(--failure); }
+  .patterns-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .patterns-table th { text-align: left; padding: 6px 8px; color: var(--text-muted); font-weight: 500; border-bottom: 1px solid var(--border); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .patterns-table td { padding: 6px 8px; border-bottom: 1px solid rgba(48,54,61,0.5); }
+  .patterns-table tr.positive td { background: rgba(63,185,80,0.04); }
+  .patterns-table tr.negative td { background: rgba(248,81,73,0.04); }
 
   /* Tooltip */
-  .tip {
-    position: fixed; pointer-events: none; z-index: 100;
-    background: var(--surface-raised); border: 1px solid var(--border); border-radius: 4px;
-    padding: 6px 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); max-width: 300px;
-  }
+  .tip { position: fixed; pointer-events: none; z-index: 100; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); max-width: 300px; }
   .tip-step { font-size: 11px; font-weight: 600; color: var(--text-bright); }
   .tip-detail { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
 </style>
 </head>
-<body x-data="moirai()">
+<body x-data="moirai()" x-cloak>
 
 <!-- Tooltip -->
 <div class="tip" x-show="tip.show" x-transition.opacity.duration.100ms
-     :style="`left:${tip.x}px;top:${tip.y}px`"
-     x-cloak>
+     :style="`left:${tip.x}px;top:${tip.y}px`">
   <div class="tip-step" x-text="tip.step"></div>
   <div class="tip-detail" x-show="tip.detail" x-text="tip.detail"></div>
 </div>
@@ -131,28 +103,178 @@
 </div>
 
 <div class="stats-bar">
-  <div class="stat"><span class="stat-value">$total_runs</span><span class="stat-label">runs</span></div>
-  <div class="stat"><span class="stat-value">$pass_rate</span><span class="stat-label">pass rate</span></div>
-  <div class="stat"><span class="stat-value">$n_tasks</span><span class="stat-label">mixed tasks</span></div>
-  <div class="stat"><span class="stat-value">$n_div</span><span class="stat-label">divergence pts</span></div>
+  <div class="stat"><span class="stat-value" x-text="data.stats.total_runs"></span><span class="stat-label">runs</span></div>
+  <div class="stat"><span class="stat-value" x-text="data.stats.pass_rate"></span><span class="stat-label">pass rate</span></div>
+  <div class="stat"><span class="stat-value" x-text="data.stats.n_tasks"></span><span class="stat-label">mixed tasks</span></div>
+  <div class="stat"><span class="stat-value" x-text="data.stats.n_div"></span><span class="stat-label">divergence pts</span></div>
 </div>
 
 <div class="legend-bar">
-  $legend_items
+  <template x-for="item in data.legend">
+    <span class="legend-item">
+      <span class="legend-swatch" :style="`background:${item[1]}`"></span>
+      <span x-text="item[0]"></span>
+    </span>
+  </template>
 </div>
 
 <div class="content">
-  $task_sections
 
+  <!-- Task panels -->
+  <template x-for="task in data.tasks" :key="task.id">
+    <div class="task-panel" :id="`task-${task.safe_id}`">
+      <div class="task-header">
+        <span class="task-name" x-text="task.id"></span>
+        <span class="task-meta">
+          <span x-text="`${task.n_runs} runs`"></span>
+          <span style="color:var(--success);font-weight:600" x-text="`${task.n_pass}P`"></span>
+          <span style="color:var(--failure);font-weight:600" x-text="`${task.n_fail}F`"></span>
+          <span x-text="`${task.n_cols} cols`"></span>
+        </span>
+      </div>
+
+      <!-- Clustering interpretation -->
+      <div x-show="task.interpretation" class="interpretation"
+           :style="`color:var(--${task.interpretation?.level || 'text-muted'})`"
+           x-text="task.interpretation?.text">
+      </div>
+
+      <!-- Dendrogram + heatmap SVG (pre-rendered) -->
+      <div class="heatmap-container" x-html="task.svg"></div>
+
+      <!-- Pass/fail comparisons -->
+      <div x-show="task.comparisons.length" class="comparisons">
+        <template x-for="comp in task.comparisons" :key="comp.number">
+          <div class="comparison" :id="`fork-${comp.task_id}-${comp.number}`"
+               @mouseenter="highlightCol(comp.task_id, comp.column)"
+               @mouseleave="clearHighlight()">
+
+            <div class="comp-header">
+              <span class="comp-number"
+                    @click="scrollToHeatmap(comp.task_id, comp.number)"
+                    x-text="comp.number"></span>
+              <span style="font-size:12px;color:var(--text)">Pass vs fail comparison at the split point</span>
+            </div>
+
+            <div class="comp-meta">
+              <span x-show="comp.p_value" x-text="`p=${comp.p_value}`"></span>
+              <span x-text="`separation: ${comp.separation}`"></span>
+            </div>
+
+            <!-- Narrative -->
+            <div x-show="comp.narrative" class="narrative">
+              After <span x-text="comp.narrative?.n_same"></span> identical
+              step<span x-show="comp.narrative?.n_same !== 1">s</span>, these runs diverge:
+              the pass run chose <code x-text="comp.narrative?.pass_action"></code>
+              while the fail run chose <code x-text="comp.narrative?.fail_action"></code>.
+              <span x-show="!comp.narrative?.same_harness" style="color:var(--text-muted)">
+                (different conditions: <span x-text="comp.narrative?.pass_harness"></span>
+                vs <span x-text="comp.narrative?.fail_harness"></span>)
+              </span>
+            </div>
+
+            <!-- Reasoning pair -->
+            <div x-show="comp.pass_reasoning || comp.fail_reasoning" class="reasoning-pair">
+              <div x-show="comp.pass_reasoning" class="reasoning-box pass">
+                <span class="reasoning-label" style="color:var(--success)">Pass reasoning:</span>
+                <span x-text="comp.pass_reasoning?.substring(0, 300)"></span>
+              </div>
+              <div x-show="comp.fail_reasoning" class="reasoning-box fail">
+                <span class="reasoning-label" style="color:var(--failure)">Fail reasoning:</span>
+                <span x-text="comp.fail_reasoning?.substring(0, 300)"></span>
+              </div>
+            </div>
+
+            <!-- Aligned diff table -->
+            <table class="diff-table">
+              <tr>
+                <th style="width:50%">
+                  <span style="color:var(--success);font-weight:600">PASS</span>
+                  <span style="color:var(--text-muted);font-weight:400" x-text="comp.pass_run_id"></span>
+                </th>
+                <th style="width:50%">
+                  <span style="color:var(--failure);font-weight:600">FAIL</span>
+                  <span style="color:var(--text-muted);font-weight:400" x-text="comp.fail_run_id"></span>
+                </th>
+              </tr>
+              <template x-for="(row, idx) in comp.rows" :key="idx">
+                <tr :class="row.first_div ? 'first-div' : (row.match ? 'match' : 'diff')">
+                  <td>
+                    <template x-if="row.pass.gap"><span class="gap">&mdash;</span></template>
+                    <template x-if="!row.pass.gap">
+                      <span>
+                        <span :style="`color:${row.pass.color || 'var(--text)'}`" x-text="row.pass.value"></span>
+                        <span x-show="row.pass.detail" class="detail" x-text="row.pass.detail"></span>
+                      </span>
+                    </template>
+                  </td>
+                  <td>
+                    <template x-if="row.fail.gap"><span class="gap">&mdash;</span></template>
+                    <template x-if="!row.fail.gap">
+                      <span>
+                        <span :style="`color:${row.fail.color || 'var(--text)'}`" x-text="row.fail.value"></span>
+                        <span x-show="row.fail.detail" class="detail" x-text="row.fail.detail"></span>
+                      </span>
+                    </template>
+                  </td>
+                </tr>
+              </template>
+            </table>
+
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+
+  <!-- Patterns -->
   <div class="patterns-panel">
     <h2>Patterns</h2>
-    <div class="patterns-body">$patterns_html</div>
+    <div class="patterns-body">
+      <template x-if="!data.patterns.baseline">
+        <p style="color:var(--text-muted)">No outcome data.</p>
+      </template>
+      <template x-if="data.patterns.baseline && !data.patterns.positive.length && !data.patterns.negative.length">
+        <p style="color:var(--text-muted)">No significant patterns (baseline: <span x-text="data.patterns.baseline"></span>).</p>
+      </template>
+      <template x-if="data.patterns.positive.length || data.patterns.negative.length">
+        <div>
+          <p style="font-size:11px;color:var(--text-muted);margin:0 0 8px">
+            Baseline: <span x-text="data.patterns.baseline"></span>
+            across <span x-text="data.patterns.n_known"></span> runs
+          </p>
+          <table class="patterns-table">
+            <tr><th style="text-align:left">Pattern</th><th style="text-align:right">Success</th><th style="text-align:right">Runs</th><th style="text-align:right">p</th></tr>
+            <template x-for="m in data.patterns.positive" :key="m.pattern">
+              <tr class="positive">
+                <td style="font-size:11px" x-text="m.pattern"></td>
+                <td style="text-align:right;color:var(--success)"><strong x-text="m.success_rate"></strong></td>
+                <td style="text-align:right;color:var(--text-muted)" x-text="m.runs"></td>
+                <td style="text-align:right;color:#484f58" x-text="m.p"></td>
+              </tr>
+            </template>
+            <template x-for="m in data.patterns.negative" :key="m.pattern">
+              <tr class="negative">
+                <td style="font-size:11px" x-text="m.pattern"></td>
+                <td style="text-align:right;color:var(--failure)"><strong x-text="m.success_rate"></strong></td>
+                <td style="text-align:right;color:var(--text-muted)" x-text="m.runs"></td>
+                <td style="text-align:right;color:#484f58" x-text="m.p"></td>
+              </tr>
+            </template>
+          </table>
+        </div>
+      </template>
+    </div>
   </div>
+
 </div>
 
 <script>
+const DATA = /*__DATA__*/{stats:{total_runs:0,pass_rate:"0%",n_tasks:0,n_div:0},legend:[],tasks:[],patterns:{baseline:null,positive:[],negative:[]}}/**/;
+
 function moirai() {
   return {
+    data: DATA,
     tip: { show: false, x: 0, y: 0, step: '', detail: '' },
     activeCol: null,
 
@@ -160,14 +282,9 @@ function moirai() {
       this.tip = { show: true, x: e.clientX + 12, y: e.clientY - 8, step, detail: detail || '' };
     },
     moveTip(e) {
-      if (this.tip.show) {
-        this.tip.x = e.clientX + 12;
-        this.tip.y = e.clientY - 8;
-      }
+      if (this.tip.show) { this.tip.x = e.clientX + 12; this.tip.y = e.clientY - 8; }
     },
-    hideTip() {
-      this.tip.show = false;
-    },
+    hideTip() { this.tip.show = false; },
 
     scrollToFork(taskId, num) {
       const card = document.getElementById(`fork-${taskId}-${num}`);
@@ -183,9 +300,9 @@ function moirai() {
       svg.scrollIntoView({ behavior: 'smooth', block: 'center' });
       const marker = svg.querySelector(`[data-div-num="${num}"]`);
       if (marker) {
-        const origR = marker.getAttribute('r');
+        const r = marker.getAttribute('r');
         marker.setAttribute('r', '10');
-        setTimeout(() => marker.setAttribute('r', origR), 400);
+        setTimeout(() => marker.setAttribute('r', r), 400);
       }
     },
 

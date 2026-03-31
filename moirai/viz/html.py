@@ -1,15 +1,21 @@
+"""HTML report generation for moirai branch analysis.
+
+Architecture:
+- Python prepares a JSON data payload + pre-rendered SVG strings
+- The HTML template (branch.html) renders everything using Alpine.js
+- No HTML generation in Python except SVG (computational layout)
+"""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
-from string import Template
 
 from moirai.compress import compress_phases, NOISE_STEPS
 from moirai.schema import (
     Alignment,
     ClusterResult,
     CohortDiff,
-    DivergencePoint,
     GAP,
     Run,
 )
@@ -43,12 +49,12 @@ TYPE_COLORS = {"tool": "#5b8fbe", "llm": "#b893c4", "system": "#b89a7a", "judge"
 
 
 # ---------------------------------------------------------------------------
-# Branch dashboard (main entry point)
+# Main entry point
 # ---------------------------------------------------------------------------
 
 def write_branch_html(
     alignment: Alignment | None,
-    points: list[DivergencePoint],
+    points: list,
     runs: list[Run],
     path: Path,
     task_results: list | None = None,
@@ -58,522 +64,298 @@ def write_branch_html(
         _write_empty(path, "No runs to display.")
         return path
 
-    # Build task sections using split divergences
-    task_sections_html = ""
+    # Build data payload
+    data = _build_data(runs, task_results)
+
+    # Load template and inject data as JSON
+    template_path = _TEMPLATE_DIR / "branch.html"
+    template = template_path.read_text(encoding="utf-8")
+    html = template.replace("/*__DATA__*/", json.dumps(data, default=str))
+
+    path.write_text(html, encoding="utf-8")
+    return path
+
+
+def _build_data(runs: list[Run], task_results: list | None) -> dict:
+    """Build the complete data payload for the template."""
+    n_pass = sum(1 for r in runs if r.result.success)
+
+    tasks = []
     total_splits = 0
+
     if task_results:
         from moirai.analyze.splits import find_split_divergences
 
         for tid, task_runs, task_alignment, _task_points in task_results:
             if not task_alignment.matrix or not task_alignment.matrix[0]:
                 continue
-            safe_tid = tid.replace(" ", "_").replace("/", "_")
+
             splits, Z, dendro = find_split_divergences(task_alignment, task_runs)
             significant = [s for s in splits if s.separation > 0.3]
             total_splits += len(significant)
-            task_sections_html += _render_task_section(
-                tid, safe_tid, task_runs, task_alignment, splits, Z, dendro,
-            )
 
-    # Stats
-    n_pass = sum(1 for r in runs if r.result.success)
-    n_tasks = len(task_results) if task_results else 0
-    n_div = total_splits
-    pass_rate = f"{n_pass / len(runs):.0%}" if runs else "0%"
+            task_data = _build_task_data(tid, task_runs, task_alignment, significant, Z, dendro)
+            tasks.append(task_data)
 
-    # Legend
-    legend_items = "".join(
-        f'<span class="legend-item"><span class="legend-swatch" style="background:{color}"></span>{name}</span>'
-        for name, color in STEP_LEGEND
-    )
+    patterns = _build_patterns_data(runs)
 
-    # Patterns
-    patterns_html = _build_patterns_table(runs)
-
-    # Load template and substitute
-    template_path = _TEMPLATE_DIR / "branch.html"
-    tpl = Template(template_path.read_text(encoding="utf-8"))
-    html = tpl.safe_substitute(
-        total_runs=len(runs),
-        pass_rate=pass_rate,
-        n_tasks=n_tasks,
-        n_div=n_div,
-        legend_items=legend_items,
-        task_sections=task_sections_html,
-        patterns_html=patterns_html,
-    )
-
-    path.write_text(html, encoding="utf-8")
-    return path
+    return {
+        "stats": {
+            "total_runs": len(runs),
+            "pass_rate": f"{n_pass / len(runs):.0%}" if runs else "0%",
+            "n_tasks": len(tasks),
+            "n_div": total_splits,
+        },
+        "legend": STEP_LEGEND,
+        "tasks": tasks,
+        "patterns": patterns,
+    }
 
 
 # ---------------------------------------------------------------------------
-# Per-task section
+# Per-task data
 # ---------------------------------------------------------------------------
 
-def _render_task_section(
+def _build_task_data(
     tid: str,
-    safe_tid: str,
     runs: list[Run],
     alignment: Alignment,
     splits: list,
     Z,
     dendro: dict,
-) -> str:
-    from moirai.schema import SplitDivergence
-
+) -> dict:
     n_pass = sum(1 for r in runs if r.result.success)
     n_fail = len(runs) - n_pass
     n_cols = len(alignment.matrix[0])
 
-    # Filter to meaningful splits (separation > 0.3)
-    significant = [s for s in splits if s.separation > 0.3]
+    interpretation = _clustering_interpretation(splits, runs)
+    svg = _build_dendrogram_heatmap_svg(alignment, runs, splits, dendro, tid)
 
-    s = f'<div class="task-panel" id="task-{safe_tid}">'
-    s += f'<div class="task-header"><span class="task-name">{tid}</span>'
-    s += f'<span class="task-meta">{len(runs)} runs '
-    s += f'<span class="pass-count">{n_pass}P</span> '
-    s += f'<span class="fail-count">{n_fail}F</span> '
-    s += f'{n_cols} cols</span></div>'
-
-    s += _clustering_interpretation_from_splits(splits, runs)
-    s += f'<div class="heatmap-container">{_build_dendrogram_heatmap(alignment, runs, significant, Z, dendro, safe_tid)}</div>'
-
-    # Pairwise run comparisons at split points
     run_map = {r.run_id: r for r in runs}
-    comparisons_shown = 0
-    for i, split in enumerate(significant, 1):
-        if comparisons_shown >= 3:
-            break
-        comp = _build_run_comparison(split, run_map, number=i, task_id=safe_tid)
+    comparisons = []
+    for i, split in enumerate(splits[:3], 1):
+        comp = _build_comparison_data(split, run_map, number=i, task_id=tid)
         if comp:
-            s += comp
-            comparisons_shown += 1
+            comparisons.append(comp)
 
-    s += '</div>'
-    return s
+    return {
+        "id": tid,
+        "safe_id": tid.replace(" ", "_").replace("/", "_"),
+        "n_runs": len(runs),
+        "n_pass": n_pass,
+        "n_fail": n_fail,
+        "n_cols": n_cols,
+        "interpretation": interpretation,
+        "svg": svg,
+        "comparisons": comparisons,
+    }
 
 
-# ---------------------------------------------------------------------------
-# Clustering interpretation
-# ---------------------------------------------------------------------------
-
-def _clustering_interpretation_from_splits(splits: list, runs: list[Run]) -> str:
+def _clustering_interpretation(splits: list, runs: list[Run]) -> dict | None:
     if len(runs) < 3:
-        return ""
+        return None
 
     n_pass = sum(1 for r in runs if r.result.success)
     n_fail = len(runs) - n_pass
     if n_pass == 0 or n_fail == 0:
-        return ""
+        return None
 
     significant = [s for s in splits if s.separation > 0.3]
     if not significant:
-        return f'<div class="cluster-interpretation" style="color:var(--text-muted)">No significant structural divergence across {len(runs)} runs.</div>'
+        return {"text": f"No significant structural divergence across {len(runs)} runs.", "level": "muted"}
 
     predictive = [s for s in significant if s.p_value is not None and s.p_value < 0.2]
-
     if predictive:
         best = min(predictive, key=lambda s: s.p_value or 1.0)
         left_top = max(best.left_values, key=best.left_values.get) if best.left_values else "?"
         right_top = max(best.right_values, key=best.right_values.get) if best.right_values else "?"
         lr = f"{best.left_success_rate:.0%}" if best.left_success_rate is not None else "?"
         rr = f"{best.right_success_rate:.0%}" if best.right_success_rate is not None else "?"
-        msg = f"Key split at column {best.column}: <code>{left_top}</code> ({lr} pass) vs <code>{right_top}</code> ({rr} pass), p={best.p_value:.3f}"
-        color = "var(--success)" if best.p_value < 0.05 else "var(--accent)"
-    else:
-        msg = f"{len(significant)} structural split{'s' if len(significant) != 1 else ''}, none significantly predict outcome."
-        color = "var(--text-muted)"
+        return {
+            "text": f"Key split at column {best.column}: {left_top} ({lr} pass) vs {right_top} ({rr} pass), p={best.p_value:.3f}",
+            "level": "success" if best.p_value < 0.05 else "accent",
+        }
 
-    return f'<div class="cluster-interpretation" style="color:{color}">{msg}</div>'
+    return {
+        "text": f"{len(significant)} structural split{'s' if len(significant) != 1 else ''}, none significantly predict outcome.",
+        "level": "muted",
+    }
 
 
 # ---------------------------------------------------------------------------
-# Fork cards
+# Pass/fail comparison data
 # ---------------------------------------------------------------------------
 
-def _build_run_comparison(split, run_map: dict[str, Run], number: int | None = None, task_id: str = "") -> str | None:
-    """Build a side-by-side comparison of a pass run vs a fail run from a split.
-
-    Picks the best pair: one from each subtree with different outcomes.
-    Shows their full step sequences with the divergence point marked.
-    """
-    # Collect all pass/fail runs from both subtrees
-    all_pass = [run_map[rid] for rid in split.left_runs + split.right_runs if run_map.get(rid) and run_map[rid].result.success is True]
-    all_fail = [run_map[rid] for rid in split.left_runs + split.right_runs if run_map.get(rid) and run_map[rid].result.success is False]
-
-    if not all_pass or not all_fail:
-        return None
-
-    # Pick the best pair: prefer same harness condition, then prefer runs with reasoning
-    pass_run, fail_run = _pick_best_pair(all_pass, all_fail)
-
-    if not pass_run or not fail_run:
-        return None
-
-    col = split.column
-    card_id = f'fork-{task_id}-{number}' if number and task_id else ""
-    hover = f'@mouseenter="highlightCol(\'{task_id}\', {col})" @mouseleave="clearHighlight()"' if task_id else ""
-
-    s = f'<div class="fork-card" id="{card_id}" {hover} style="padding:16px">'
-
-    # Header
-    s += '<div class="fork-card-header">'
-    if number is not None and task_id:
-        s += f'<span class="fork-number" @click="scrollToHeatmap(\'{task_id}\', {number})">{number}</span>'
-    s += '<span class="fork-summary">Pass vs fail comparison at the split point</span>'
-    s += '</div>'
-
-    if split.p_value is not None:
-        s += f'<div class="fork-pvalue">p={split.p_value:.3f} · separation: {split.separation:.0%}</div>'
-
-    # Align the two runs with NW to find matching/divergent steps
+def _build_comparison_data(split, run_map: dict[str, Run], number: int, task_id: str) -> dict | None:
+    """Build data for a pass/fail comparison at a split point."""
     from moirai.analyze.align import _nw_align
     from moirai.compress import step_enriched_name
 
-    pass_steps = [(step, step_enriched_name(step)) for step in pass_run.steps if step_enriched_name(step) is not None]
-    fail_steps = [(step, step_enriched_name(step)) for step in fail_run.steps if step_enriched_name(step) is not None]
+    all_rids = split.left_runs + split.right_runs
+    pass_runs = [run_map[rid] for rid in all_rids if run_map.get(rid) and run_map[rid].result.success is True]
+    fail_runs = [run_map[rid] for rid in all_rids if run_map.get(rid) and run_map[rid].result.success is False]
 
-    pass_names = [name for _, name in pass_steps]
-    fail_names = [name for _, name in fail_steps]
-    aligned_pass, aligned_fail = _nw_align(pass_names, fail_names)
+    if not pass_runs or not fail_runs:
+        return None
 
-    # Find first divergence point
+    pass_run, fail_run = _pick_best_pair(pass_runs, fail_runs)
+
+    # Build enriched step lists
+    p_steps = _enrich_steps(pass_run)
+    f_steps = _enrich_steps(fail_run)
+
+    # Align
+    p_names = [s["enriched"] for s in p_steps]
+    f_names = [s["enriched"] for s in f_steps]
+    aligned_p, aligned_f = _nw_align(p_names, f_names)
+
+    # Find first divergence
     first_div = None
-    for idx, (a, b) in enumerate(zip(aligned_pass, aligned_fail)):
+    for idx, (a, b) in enumerate(zip(aligned_p, aligned_f)):
         if a != b:
             first_div = idx
             break
 
-    # Generate narrative
+    # Build aligned rows for the template
+    rows = []
+    p_idx, f_idx = 0, 0
+    for i, (a, b) in enumerate(zip(aligned_p, aligned_f)):
+        is_match = (a == b)
+        is_first_div = (i == first_div)
+        is_diff = not is_match
+
+        p_cell = {"value": a, "detail": "", "gap": a == GAP}
+        if a != GAP and p_idx < len(p_steps):
+            p_cell["detail"] = p_steps[p_idx]["detail"]
+            p_cell["color"] = STEP_COLORS.get(a, DEFAULT_COLOR)
+            p_idx += 1
+
+        f_cell = {"value": b, "detail": "", "gap": b == GAP}
+        if b != GAP and f_idx < len(f_steps):
+            f_cell["detail"] = f_steps[f_idx]["detail"]
+            f_cell["color"] = STEP_COLORS.get(b, DEFAULT_COLOR)
+            f_idx += 1
+
+        rows.append({
+            "pass": p_cell,
+            "fail": f_cell,
+            "match": is_match,
+            "first_div": is_first_div,
+            "diff": is_diff,
+        })
+
+    # Narrative
+    narrative = None
+    pass_reasoning = None
+    fail_reasoning = None
     if first_div is not None:
-        pa = aligned_pass[first_div]
-        fa = aligned_fail[first_div]
+        pa, fa = aligned_p[first_div], aligned_f[first_div]
+        p_detail = _detail_at(p_steps, aligned_p, first_div)
+        f_detail = _detail_at(f_steps, aligned_f, first_div)
 
-        # Get detail for the divergent steps
-        p_detail = _find_step_detail(pass_steps, pa, aligned_pass, first_div)
-        f_detail = _find_step_detail(fail_steps, fa, aligned_fail, first_div)
-
-        # Build readable descriptions
-        if pa == GAP:
-            p_desc = "skipped this step"
-        else:
-            p_desc = f"<code>{pa}</code>"
-            if p_detail:
-                p_desc += f" ({p_detail})"
-
-        if fa == GAP:
-            f_desc = "skipped this step"
-        else:
-            f_desc = f"<code>{fa}</code>"
-            if f_detail:
-                f_desc += f" ({f_detail})"
+        p_desc = f"{pa} ({p_detail})" if pa != GAP and p_detail else (pa if pa != GAP else "skipped this step")
+        f_desc = f"{fa} ({f_detail})" if fa != GAP and f_detail else (fa if fa != GAP else "skipped this step")
 
         same_harness = pass_run.harness == fail_run.harness
-        harness_note = ""
-        if not same_harness:
-            harness_note = f' <span style="color:var(--text-muted)">(different conditions: {pass_run.harness} vs {fail_run.harness})</span>'
+        narrative = {
+            "n_same": first_div,
+            "pass_action": p_desc,
+            "fail_action": f_desc,
+            "same_harness": same_harness,
+            "pass_harness": pass_run.harness,
+            "fail_harness": fail_run.harness,
+        }
 
-        narrative = (
-            f'After {first_div} identical step{"s" if first_div != 1 else ""}, these runs diverge: '
-            f'the pass run chose {p_desc} '
-            f'while the fail run chose {f_desc}.{harness_note}'
-        )
-        s += f'<div style="font-size:12px;color:var(--text);margin:12px 0;line-height:1.5">{narrative}</div>'
+        pass_reasoning = _reasoning_at(p_steps, aligned_p, first_div)
+        fail_reasoning = _reasoning_at(f_steps, aligned_f, first_div)
 
-        # Show reasoning at the divergence point if available
-        p_reasoning = _find_step_reasoning(pass_steps, aligned_pass, first_div)
-        f_reasoning = _find_step_reasoning(fail_steps, aligned_fail, first_div)
-        if p_reasoning or f_reasoning:
-            s += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:8px 0">'
-            if p_reasoning:
-                s += f'<div style="font-size:10px;color:var(--text-muted);font-style:italic;padding:6px 10px;background:rgba(63,185,80,0.06);border-left:2px solid var(--success);border-radius:3px"><span style="color:var(--success);font-weight:600">Pass reasoning:</span> {p_reasoning[:250]}</div>'
-            else:
-                s += '<div></div>'
-            if f_reasoning:
-                s += f'<div style="font-size:10px;color:var(--text-muted);font-style:italic;padding:6px 10px;background:rgba(248,81,73,0.06);border-left:2px solid var(--failure);border-radius:3px"><span style="color:var(--failure);font-weight:600">Fail reasoning:</span> {f_reasoning[:250]}</div>'
-            else:
-                s += '<div></div>'
-            s += '</div>'
-
-    # Aligned diff view
-    s += '<div style="margin-top:12px;font-size:10px;overflow-x:auto">'
-    s += '<table style="width:100%;border-collapse:collapse">'
-    s += '<tr><th style="width:50%;text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">'
-    s += f'<span style="color:var(--success);font-weight:600">PASS</span> <span style="color:var(--text-muted)">{pass_run.run_id}</span></th>'
-    s += f'<th style="width:50%;text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">'
-    s += f'<span style="color:var(--failure);font-weight:600">FAIL</span> <span style="color:var(--text-muted)">{fail_run.run_id}</span></th></tr>'
-
-    pass_orig_idx = 0
-    fail_orig_idx = 0
-    for idx, (a, b) in enumerate(zip(aligned_pass, aligned_fail)):
-        is_match = (a == b)
-        is_div_point = (idx == first_div)
-
-        if is_div_point:
-            row_bg = "background:rgba(210,153,34,0.08);"
-            border = "border-left:3px solid var(--accent);"
-        elif is_match:
-            row_bg = ""
-            border = "border-left:3px solid transparent;"
-        else:
-            row_bg = "background:rgba(210,153,34,0.04);"
-            border = "border-left:3px solid rgba(210,153,34,0.3);"
-
-        # Pass cell
-        if a == GAP:
-            p_cell = '<span style="color:var(--border)">—</span>'
-        else:
-            p_step, _ = pass_steps[pass_orig_idx] if pass_orig_idx < len(pass_steps) else (None, "")
-            p_detail_text = _step_detail_text(p_step) if p_step else ""
-            text_color = "var(--text-muted)" if is_match else "var(--text-bright)"
-            p_cell = f'<span style="color:{text_color}">{a}</span>'
-            if p_detail_text:
-                p_cell += f' <span style="color:#484f58">{p_detail_text}</span>'
-            pass_orig_idx += 1
-
-        # Fail cell
-        if b == GAP:
-            f_cell = '<span style="color:var(--border)">—</span>'
-        else:
-            f_step, _ = fail_steps[fail_orig_idx] if fail_orig_idx < len(fail_steps) else (None, "")
-            f_detail_text = _step_detail_text(f_step) if f_step else ""
-            text_color = "var(--text-muted)" if is_match else "var(--text-bright)"
-            f_cell = f'<span style="color:{text_color}">{b}</span>'
-            if f_detail_text:
-                f_cell += f' <span style="color:#484f58">{f_detail_text}</span>'
-            fail_orig_idx += 1
-
-        s += f'<tr style="{row_bg}"><td style="padding:2px 8px;{border}">{p_cell}</td><td style="padding:2px 8px;{border}">{f_cell}</td></tr>'
-
-    s += '</table></div>'
-
-    s += '</div>'
-    return s
+    return {
+        "number": number,
+        "task_id": task_id,
+        "column": split.column,
+        "p_value": f"{split.p_value:.3f}" if split.p_value is not None else None,
+        "separation": f"{split.separation:.0%}",
+        "pass_run_id": pass_run.run_id,
+        "fail_run_id": fail_run.run_id,
+        "narrative": narrative,
+        "pass_reasoning": pass_reasoning,
+        "fail_reasoning": fail_reasoning,
+        "rows": rows,
+    }
 
 
-def _find_step_detail(steps: list[tuple], value: str, aligned: list[str], aligned_idx: int) -> str:
-    """Find the attrs detail for a step at an aligned position."""
-    orig_idx = sum(1 for i in range(aligned_idx) if aligned[i] != GAP)
-    if orig_idx < len(steps):
-        step, _ = steps[orig_idx]
-        return _step_detail_text(step)
-    return ""
+def _enrich_steps(run: Run) -> list[dict]:
+    from moirai.compress import step_enriched_name
+    steps = []
+    for s in run.steps:
+        enriched = step_enriched_name(s)
+        if enriched is None:
+            continue
+        detail = ""
+        if s.attrs:
+            fp = s.attrs.get("file_path", "")
+            if fp:
+                detail = os.path.basename(fp)
+            cmd = s.attrs.get("command", "")
+            if cmd:
+                detail = cmd[:80]
+            pat = s.attrs.get("pattern", "")
+            if pat:
+                detail = pat[:60]
+        steps.append({
+            "enriched": enriched,
+            "detail": detail,
+            "reasoning": s.output.get("reasoning", "") if s.output else "",
+        })
+    return steps
 
 
-def _find_step_reasoning(steps: list[tuple], aligned: list[str], aligned_idx: int) -> str:
-    """Find the reasoning for a step at an aligned position."""
-    orig_idx = sum(1 for i in range(aligned_idx) if aligned[i] != GAP)
-    if orig_idx < len(steps):
-        step, _ = steps[orig_idx]
-        return step.output.get("reasoning", "") if step.output else ""
-    return ""
-
-
-def _step_detail_text(step) -> str:
-    """Get a short detail string from step attrs."""
-    if not step or not step.attrs:
+def _detail_at(steps, aligned, idx):
+    orig = sum(1 for i in range(idx) if aligned[i] != GAP)
+    if aligned[idx] == GAP or orig >= len(steps):
         return ""
-    fp = step.attrs.get("file_path", "")
-    if fp:
-        return os.path.basename(fp)
-    cmd = step.attrs.get("command", "")
-    if cmd:
-        return cmd[:50]
-    pat = step.attrs.get("pattern", "")
-    if pat:
-        return pat[:40]
-    return ""
+    return steps[orig]["detail"]
+
+
+def _reasoning_at(steps, aligned, idx):
+    orig = sum(1 for i in range(idx) if aligned[i] != GAP)
+    if aligned[idx] == GAP or orig >= len(steps):
+        return None
+    r = steps[orig]["reasoning"]
+    return r if r else None
 
 
 def _pick_best_pair(pass_runs: list[Run], fail_runs: list[Run]) -> tuple[Run, Run]:
-    """Pick the best pass/fail pair for comparison.
-
-    Priority: same harness condition > both have reasoning > any pair.
-    """
-    def _has_reasoning(r: Run) -> bool:
+    def _has_reasoning(r):
         return any(s.output.get("reasoning") for s in r.steps if s.output)
-
-    def _harness(r: Run) -> str:
+    def _harness(r):
         return r.harness or ""
 
-    # Try same-condition pairs with reasoning first
     for p in pass_runs:
         for f in fail_runs:
             if _harness(p) == _harness(f) and _has_reasoning(p) and _has_reasoning(f):
                 return p, f
-
-    # Same condition, at least one has reasoning
-    for p in pass_runs:
-        for f in fail_runs:
-            if _harness(p) == _harness(f) and (_has_reasoning(p) or _has_reasoning(f)):
-                return p, f
-
-    # Same condition, no reasoning
     for p in pass_runs:
         for f in fail_runs:
             if _harness(p) == _harness(f):
                 return p, f
-
-    # Any pair with reasoning
     for p in pass_runs:
         for f in fail_runs:
             if _has_reasoning(p) or _has_reasoning(f):
                 return p, f
-
     return pass_runs[0], fail_runs[0]
 
 
-def _render_run_column(run: Run, divergence_col: int, is_pass: bool) -> str:
-    """Render one run as a vertical step list with the divergence point marked."""
-    from moirai.compress import step_enriched_name
-
-    tag = "PASS" if is_pass else "FAIL"
-    color = "var(--success)" if is_pass else "var(--failure)"
-    bg = "rgba(63,185,80,0.04)" if is_pass else "rgba(248,81,73,0.04)"
-    border_color = "var(--success)" if is_pass else "var(--failure)"
-
-    s = f'<div style="border:1px solid {border_color};border-radius:6px;overflow:hidden">'
-    s += f'<div style="padding:8px 12px;background:{bg};border-bottom:1px solid var(--border);font-size:11px">'
-    s += f'<span style="color:{color};font-weight:700">{tag}</span> '
-    s += f'<span style="color:var(--text-muted)">{run.run_id}</span>'
-    s += '</div>'
-
-    s += '<div style="padding:8px 0">'
-
-    filtered_idx = 0
-    for step in run.steps:
-        enriched = step_enriched_name(step)
-        if enriched is None:
-            continue
-
-        # Get detail
-        detail = ""
-        if step.attrs:
-            fp = step.attrs.get("file_path", "")
-            if fp:
-                detail = os.path.basename(fp)
-            cmd = step.attrs.get("command", "")
-            if cmd:
-                detail = cmd[:60]
-            pat = step.attrs.get("pattern", "")
-            if pat:
-                detail = pat[:40]
-
-        reasoning = step.output.get("reasoning", "") if step.output else ""
-
-        # Is this near the divergence point?
-        is_divergence = (filtered_idx == divergence_col)
-        step_color = STEP_COLORS.get(enriched, DEFAULT_COLOR)
-
-        if is_divergence:
-            s += f'<div style="padding:4px 12px;background:rgba(210,153,34,0.1);border-left:3px solid var(--accent);margin:2px 0">'
-        else:
-            s += f'<div style="padding:2px 12px;margin:1px 0;border-left:3px solid transparent">'
-
-        # Step name with color indicator
-        s += f'<div style="font-size:11px;display:flex;align-items:center;gap:6px">'
-        s += f'<span style="width:4px;height:4px;border-radius:50%;background:{step_color};flex-shrink:0"></span>'
-        s += f'<span style="color:var(--text-bright)">{enriched}</span>'
-        if detail:
-            s += f' <span style="color:var(--text-muted);font-size:10px">{detail}</span>'
-        s += '</div>'
-
-        # Reasoning (if present)
-        if reasoning:
-            s += f'<div style="font-size:10px;color:var(--text-muted);font-style:italic;margin:2px 0 2px 10px;padding-left:8px;border-left:1px solid var(--border)">'
-            s += f'{reasoning[:150]}'
-            if len(reasoning) > 150:
-                s += '...'
-            s += '</div>'
-
-        s += '</div>'
-        filtered_idx += 1
-
-    s += '</div></div>'
-    return s
-
-
-def _build_split_card(split, number: int | None = None, task_id: str = "") -> str:
-    """Render a card for a dendrogram split divergence."""
-    p_str = f"p={split.p_value:.3f}" if split.p_value is not None else ""
-    col = split.column
-
-    card_id = f'fork-{task_id}-{number}' if number and task_id else ""
-    hover = f'@mouseenter="highlightCol(\'{task_id}\', {col})" @mouseleave="clearHighlight()"' if task_id else ""
-
-    # Summary: what separates the two subtrees
-    left_top = max(split.left_values, key=split.left_values.get) if split.left_values else "?"
-    right_top = max(split.right_values, key=split.right_values.get) if split.right_values else "?"
-    lr = f"{split.left_success_rate:.0%}" if split.left_success_rate is not None else "?"
-    rr = f"{split.right_success_rate:.0%}" if split.right_success_rate is not None else "?"
-
-    summary = (
-        f"At column {col}, {len(split.left_runs)} runs chose "
-        f"<code>{left_top}</code> ({lr} pass) while "
-        f"{len(split.right_runs)} runs chose <code>{right_top}</code> ({rr} pass)."
-    )
-
-    s = f'<div class="fork-card" id="{card_id}" {hover}>'
-    s += '<div class="fork-card-header">'
-    if number is not None and task_id:
-        s += f'<span class="fork-number" @click="scrollToHeatmap(\'{task_id}\', {number})">{number}</span>'
-    elif number is not None:
-        s += f'<span class="fork-number">{number}</span>'
-    s += f'<span class="fork-summary">{summary}</span></div>'
-
-    meta_parts = []
-    if p_str:
-        meta_parts.append(p_str)
-    meta_parts.append(f"separation: {split.separation:.0%}")
-    meta_parts.append(f"merge distance: {split.merge_distance:.3f}")
-    s += f'<div class="fork-pvalue">{" · ".join(meta_parts)}</div>'
-
-    # Left subtree branch
-    s += _split_branch_html(split.left_values, split.left_success_rate, len(split.left_runs), "left subtree")
-    # Right subtree branch
-    s += _split_branch_html(split.right_values, split.right_success_rate, len(split.right_runs), "right subtree")
-
-    s += '</div>'
-    return s
-
-
-def _split_branch_html(values: dict[str, int], success_rate: float | None, n_runs: int, label: str) -> str:
-    rate = success_rate
-    if rate is not None and rate >= 0.6:
-        cls, rate_cls = "branch-success", "success"
-    elif rate is not None and rate <= 0.2:
-        cls, rate_cls = "branch-failure", "failure"
-    else:
-        cls, rate_cls = "branch-mixed", ""
-
-    rate_str = f"{rate:.0%}" if rate is not None else "?"
-    vals_str = ", ".join(f"<code>{v}</code> ({c})" for v, c in sorted(values.items(), key=lambda x: -x[1]))
-
-    s = f'<div class="branch {cls}">'
-    s += f'<div class="branch-header"><span class="branch-rate {rate_cls}">{rate_str} pass</span> — {n_runs} runs ({label})</div>'
-    s += f'<div class="branch-trajectory">Values: {vals_str}</div>'
-    s += '</div>'
-    return s
-
-
 # ---------------------------------------------------------------------------
-# Dendrogram + heatmap SVG
+# Dendrogram + heatmap SVG (computational — stays in Python)
 # ---------------------------------------------------------------------------
 
-def _scipy_coords_to_svg(
-    icoord: list[list[float]],
-    dcoord: list[list[float]],
-    cell_h: float,
-    dendro_w: float,
-) -> list[str]:
+def _scipy_coords_to_svg(icoord, dcoord, cell_h, dendro_w):
     if not icoord:
         return []
-
     max_d = max(max(d) for d in dcoord) if dcoord else 1.0
     if max_d == 0:
         max_d = 1.0
-
     paths = []
     for ic, dc in zip(icoord, dcoord):
         pts = []
@@ -589,16 +371,16 @@ def _scipy_coords_to_svg(
     return paths
 
 
-def _build_dendrogram_heatmap(
+def _build_dendrogram_heatmap_svg(
     alignment: Alignment,
     runs: list[Run],
     splits: list,
-    Z,
     dendro: dict,
     task_id: str = "",
 ) -> str:
+    """Build the dendrogram + heatmap SVG. This is computational layout that stays in Python."""
     if not alignment.matrix or not alignment.matrix[0]:
-        return '<p style="color:var(--text-muted)">No alignment data.</p>'
+        return ""
 
     n_runs = len(alignment.run_ids)
     n_cols = len(alignment.matrix[0])
@@ -625,7 +407,7 @@ def _build_dendrogram_heatmap(
             details.append(detail)
         step_details[run.run_id] = details
 
-    # Dendrogram ordering from precomputed data
+    # Dendrogram ordering
     dendro_paths: list[str] = []
     leaf_order: list[int] = list(range(n_runs))
     dendro_w = 0
@@ -646,12 +428,11 @@ def _build_dendrogram_heatmap(
     svg_w = heatmap_x + n_cols * cell_w + 10
     marker_h = 20
     svg_h = n_runs * cell_h + marker_h + 4
-
-    svg_id = f'id="heatmap-{task_id}"' if task_id else ""
-    parts = [f'<svg {svg_id} width="{svg_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg" '
-             f'style="font-family:\'IBM Plex Mono\',monospace;font-size:9px">']
-
     y_off = marker_h
+
+    safe_tid = task_id.replace(" ", "_").replace("/", "_")
+    parts = [f'<svg id="heatmap-{safe_tid}" width="{svg_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg" '
+             f'style="font-family:\'IBM Plex Mono\',monospace;font-size:9px">']
 
     # Dendrogram
     if dendro_paths:
@@ -659,10 +440,8 @@ def _build_dendrogram_heatmap(
         parts.extend(dendro_paths)
         parts.append('</g>')
 
-    # Numbered divergence markers from splits + connector lines from dendrogram
+    # Numbered divergence markers + connectors
     div_columns: dict[int, int] = {}
-    split_connectors: list[str] = []
-
     max_d = max(max(d) for d in dendro["dcoord"]) if dendro.get("dcoord") else 1.0
     if max_d == 0:
         max_d = 1.0
@@ -671,24 +450,18 @@ def _build_dendrogram_heatmap(
         if sp.column < n_cols:
             num = i + 1
             div_columns[sp.column] = num
-
             col_x = heatmap_x + sp.column * cell_w + cell_w // 2
 
-            # Find the dendrogram branch point for this split's merge distance
-            # The branch point is at x = dendro_w * (1 - merge_dist/max_d),
-            # y = average of the two subtree centers
             if dendro_w > 0:
                 branch_x = dendro_w * (1 - sp.merge_distance / max_d)
-                # Approximate branch y: average of left and right subtree leaf positions
                 left_rows = [leaf_order.index(alignment.run_ids.index(rid)) for rid in sp.left_runs if rid in alignment.run_ids]
                 right_rows = [leaf_order.index(alignment.run_ids.index(rid)) for rid in sp.right_runs if rid in alignment.run_ids]
                 if left_rows and right_rows:
                     branch_y = y_off + ((sum(left_rows) / len(left_rows) + sum(right_rows) / len(right_rows)) / 2) * cell_h + cell_h / 2
-                    # Connector: dashed line from branch point to column marker
                     is_sig = sp.p_value is not None and sp.p_value < 0.2
                     stroke_color = "#d29922" if is_sig else "#484f58"
                     stroke_opacity = "0.5" if is_sig else "0.2"
-                    split_connectors.append(
+                    parts.append(
                         f'<path d="M {branch_x:.1f},{branch_y:.1f} '
                         f'C {(branch_x + col_x) / 2:.1f},{branch_y:.1f} '
                         f'{(branch_x + col_x) / 2:.1f},{marker_h // 2 + 1:.1f} '
@@ -700,12 +473,9 @@ def _build_dendrogram_heatmap(
     for col, num in div_columns.items():
         x = heatmap_x + col * cell_w + cell_w // 2
         parts.append(f'<line x1="{x}" y1="{marker_h}" x2="{x}" y2="{svg_h}" stroke="#d29922" stroke-width="0.5" opacity="0.15" data-col="{col}"/>')
-        click = f' @click="scrollToFork(\'{task_id}\', {num})" style="cursor:pointer"' if task_id else ""
-        parts.append(f'<circle cx="{x}" cy="{marker_h // 2 + 1}" r="7" fill="#d29922" data-div-num="{num}"{click}/>')
+        parts.append(f'<circle cx="{x}" cy="{marker_h // 2 + 1}" r="7" fill="#d29922" data-div-num="{num}" '
+                     f'@click="scrollToFork(\'{safe_tid}\', {num})" style="cursor:pointer"/>')
         parts.append(f'<text x="{x}" y="{marker_h // 2 + 4}" text-anchor="middle" fill="#0d1117" font-size="9" font-weight="700" style="pointer-events:none">{num}</text>')
-
-    # Draw connectors after markers so they render on top
-    parts.extend(split_connectors)
 
     # Rows
     for row_idx, orig_idx in enumerate(leaf_order):
@@ -713,13 +483,11 @@ def _build_dendrogram_heatmap(
         y = y_off + row_idx * cell_h
         succ = success_map.get(rid)
 
-        parts.append(f'<g class="heatmap-row">')
+        parts.append('<g class="heatmap-row">')
 
-        # Outcome strip
         oc = "#3fb950" if succ is True else ("#f85149" if succ is False else "#30363d")
         parts.append(f'<rect x="{dendro_w + gap}" y="{y}" width="{outcome_w}" height="{cell_h - 1}" fill="{oc}" rx="1"/>')
 
-        # Label
         tag = "P" if succ is True else ("F" if succ is False else "?")
         tc = "#3fb950" if succ else "#f85149"
         short_id = rid[:18] + ".." if len(rid) > 20 else rid
@@ -727,7 +495,6 @@ def _build_dendrogram_heatmap(
         parts.append(f'<text x="{lx}" y="{y + cell_h - 3}" fill="#8b949e" font-size="8">{short_id}</text>')
         parts.append(f'<text x="{heatmap_x - 4}" y="{y + cell_h - 3}" text-anchor="end" fill="{tc}" font-size="9" font-weight="600">{tag}</text>')
 
-        # Heatmap cells
         row = alignment.matrix[orig_idx]
         details = step_details.get(rid, [])
         non_gap_idx = 0
@@ -759,50 +526,30 @@ def _build_dendrogram_heatmap(
 
 
 # ---------------------------------------------------------------------------
-# Patterns table
+# Patterns data
 # ---------------------------------------------------------------------------
 
-def _build_patterns_table(runs: list[Run]) -> str:
+def _build_patterns_data(runs: list[Run]) -> dict:
     from moirai.analyze.motifs import find_motifs
 
     motifs, _ = find_motifs(runs, min_n=3, max_n=5, min_count=3)
     known = [r for r in runs if r.result.success is not None]
     if not known:
-        return '<p style="color:var(--text-muted)">No outcome data.</p>'
+        return {"baseline": None, "positive": [], "negative": []}
+
     baseline = sum(1 for r in known if r.result.success) / len(known)
+    positive = [{"pattern": m.display, "success_rate": f"{m.success_rate:.0%}", "runs": m.total_runs,
+                 "p": f"{m.p_value:.3f}" if m.p_value is not None else ""}
+                for m in motifs if m.lift > 1.05][:6]
+    negative = [{"pattern": m.display, "success_rate": f"{m.success_rate:.0%}", "runs": m.total_runs,
+                 "p": f"{m.p_value:.3f}" if m.p_value is not None else ""}
+                for m in motifs if m.lift < 0.95][:6]
 
-    positive = [m for m in motifs if m.lift > 1.05][:6]
-    negative = [m for m in motifs if m.lift < 0.95][:6]
-
-    if not positive and not negative:
-        return f'<p style="color:var(--text-muted)">No significant patterns (baseline: {baseline:.0%}).</p>'
-
-    html = f'<p style="font-size:11px;color:var(--text-muted);margin:0 0 8px">Baseline: {baseline:.0%} across {len(known)} runs</p>'
-    html += '<table><tr><th style="text-align:left">Pattern</th><th style="text-align:right">Success</th><th style="text-align:right">Runs</th><th style="text-align:right">p</th></tr>'
-
-    for m in positive:
-        p_str = f"{m.p_value:.3f}" if m.p_value is not None else ""
-        html += f'<tr class="positive"><td style="font-size:11px">{m.display}</td>'
-        html += f'<td style="text-align:right" class="success"><strong>{m.success_rate:.0%}</strong></td>'
-        html += f'<td style="text-align:right;color:var(--text-muted)">{m.total_runs}</td>'
-        html += f'<td style="text-align:right;color:#484f58">{p_str}</td></tr>'
-
-    if positive and negative:
-        html += '<tr><td colspan="4" style="padding:4px"></td></tr>'
-
-    for m in negative:
-        p_str = f"{m.p_value:.3f}" if m.p_value is not None else ""
-        html += f'<tr class="negative"><td style="font-size:11px">{m.display}</td>'
-        html += f'<td style="text-align:right" class="failure"><strong>{m.success_rate:.0%}</strong></td>'
-        html += f'<td style="text-align:right;color:var(--text-muted)">{m.total_runs}</td>'
-        html += f'<td style="text-align:right;color:#484f58">{p_str}</td></tr>'
-
-    html += '</table>'
-    return html
+    return {"baseline": f"{baseline:.0%}", "n_known": len(known), "positive": positive, "negative": negative}
 
 
 # ---------------------------------------------------------------------------
-# Clusters and Diff (unchanged)
+# Clusters and Diff (unchanged — still use plotly)
 # ---------------------------------------------------------------------------
 
 def write_clusters_html(result: ClusterResult, path: Path, runs: list[Run] | None = None) -> Path:
