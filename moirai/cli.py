@@ -448,6 +448,65 @@ def explain(
                     console.print(f"  [{color}]{value}[/{color}]: {count} runs, {rate_str} success{marker}")
 
 
+@app.command()
+def divergence(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    task: str = typer.Option(None, "--task", help="Task ID (prefix match). If omitted, shows all mixed-outcome tasks."),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    model: str | None = typer.Option(None, help="Filter by model"),
+    harness: str | None = typer.Option(None, help="Filter by harness"),
+    task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
+) -> None:
+    """Output structured pass/fail comparison for LLM analysis.
+
+    Generates a rich comparison document showing where a passing and failing run
+    diverge, including reasoning, edit diffs, and tool outputs. Designed to be
+    consumed by an LLM (Claude Code, Codex, etc.) for analysis.
+
+    Usage:
+        moirai divergence runs/ --task ansible_ansible-85709
+        moirai divergence runs/ --task ansible_ansible-85709 | pbcopy
+    """
+    runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
+
+    from collections import defaultdict
+    from moirai.analyze.explain import explain_task
+
+    # Group by task
+    by_task: dict[str, list] = defaultdict(list)
+    for r in runs:
+        by_task[r.task_id].append(r)
+
+    # Filter to mixed-outcome tasks
+    mixed = {tid: task_runs for tid, task_runs in by_task.items()
+             if any(r.result.success for r in task_runs) and any(not r.result.success for r in task_runs)}
+
+    if not mixed:
+        err_console.print("[yellow]No tasks with mixed outcomes found.[/yellow]")
+        raise typer.Exit(0)
+
+    if task:
+        # Match by prefix
+        matches = {tid: r for tid, r in mixed.items() if tid.startswith(task)}
+        if not matches:
+            err_console.print(f"[red]error:[/red] no mixed-outcome task matching '{task}'")
+            err_console.print("available tasks with mixed outcomes:")
+            for tid, task_runs in sorted(mixed.items()):
+                n_p = sum(1 for r in task_runs if r.result.success)
+                n_f = len(task_runs) - n_p
+                err_console.print(f"  {tid} ({n_p}P/{n_f}F)")
+            raise typer.Exit(1)
+        targets = matches
+    else:
+        targets = mixed
+
+    for tid in sorted(targets):
+        output = explain_task(tid, targets[tid])
+        console.print(output)
+        if len(targets) > 1:
+            console.print("\n" + "=" * 80 + "\n")
+
+
 def _show_available_values(runs: list[Run], kv_pairs: list[str]) -> None:
     """Show available values for filter keys to help the user."""
     from moirai.filters import parse_kv_filter

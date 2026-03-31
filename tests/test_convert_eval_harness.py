@@ -105,8 +105,8 @@ class TestParseTranscript:
         assert len(result) == 1
         assert result[0]["reasoning"] == "reasoning"
 
-    def test_reasoning_truncated(self, tmp_path):
-        """Reasoning is truncated to 500 chars."""
+    def test_reasoning_not_truncated(self, tmp_path):
+        """Full reasoning is preserved without truncation."""
         long_text = "x" * 1000
         jsonl_path = tmp_path / "transcript.jsonl"
         _write_jsonl(jsonl_path, [
@@ -115,7 +115,7 @@ class TestParseTranscript:
         ])
 
         result = parse_transcript(jsonl_path)
-        assert len(result[0]["reasoning"]) == 500
+        assert len(result[0]["reasoning"]) == 1000
 
 
 class TestConvertTrialMerge:

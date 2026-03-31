@@ -180,18 +180,18 @@ def parse_transcript(jsonl_path: Path) -> list[dict]:
             bt = block.get("type")
 
             if bt == "thinking":
-                pending_reasoning = block.get("thinking", "")[:500]
+                pending_reasoning = block.get("thinking", "")
             elif bt == "text":
-                # Only use text as reasoning if we don't already have thinking
                 if pending_reasoning is None:
-                    pending_reasoning = block.get("text", "")[:500]
+                    pending_reasoning = block.get("text", "")
             elif bt == "tool_use":
                 tool_use_id = block.get("id", "")
-                entry = {
+                entry: dict = {
                     "reasoning": pending_reasoning,
                     "result": None,
                     "tool_name": block.get("name", ""),
                     "tool_use_id": tool_use_id,
+                    "input": block.get("input", {}),
                 }
                 id_to_idx[tool_use_id] = len(tool_calls)
                 tool_calls.append(entry)
@@ -202,10 +202,9 @@ def parse_transcript(jsonl_path: Path) -> list[dict]:
                 if idx is not None:
                     result_content = block.get("content", "")
                     if isinstance(result_content, list):
-                        # Extract text from content blocks
                         parts = [p.get("text", "") for p in result_content if isinstance(p, dict)]
                         result_content = "\n".join(parts)
-                    tool_calls[idx]["result"] = str(result_content)[:300]
+                    tool_calls[idx]["result"] = str(result_content)
 
     return tool_calls
 
@@ -245,13 +244,15 @@ def _merge_transcript(steps: list[dict], transcript: list[dict]) -> None:
             print(f"  warning: tool name mismatch at position {i}: log={log_name} transcript={transcript_name}, stopping merge", file=sys.stderr)
             break
 
-        # Merge reasoning and result
+        # Merge all enrichment fields
         if "output" not in step:
             step["output"] = {}
         if tc["reasoning"]:
             step["output"]["reasoning"] = tc["reasoning"]
         if tc["result"]:
             step["output"]["result"] = tc["result"]
+        if tc.get("input"):
+            step["output"]["tool_input"] = tc["input"]
 
 
 def convert_trial(trial_path: Path, log_dir: Path, transcripts_dir: Path | None = None) -> dict | None:
