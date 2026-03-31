@@ -58,24 +58,27 @@ def write_branch_html(
         _write_empty(path, "No runs to display.")
         return path
 
-    # Build task sections
+    # Build task sections using split divergences
     task_sections_html = ""
+    total_splits = 0
     if task_results:
-        from moirai.analyze.narrate import narrate_task
+        from moirai.analyze.splits import find_split_divergences
 
-        for tid, task_runs, task_alignment, task_points in task_results:
+        for tid, task_runs, task_alignment, _task_points in task_results:
             if not task_alignment.matrix or not task_alignment.matrix[0]:
                 continue
             safe_tid = tid.replace(" ", "_").replace("/", "_")
-            findings = narrate_task(tid, task_runs, task_alignment, task_points)
+            splits, Z, dendro = find_split_divergences(task_alignment, task_runs)
+            significant = [s for s in splits if s.separation > 0.3]
+            total_splits += len(significant)
             task_sections_html += _render_task_section(
-                tid, safe_tid, task_runs, task_alignment, task_points, findings,
+                tid, safe_tid, task_runs, task_alignment, splits, Z, dendro,
             )
 
     # Stats
     n_pass = sum(1 for r in runs if r.result.success)
     n_tasks = len(task_results) if task_results else 0
-    n_div = sum(len(pts) for _, _, _, pts in task_results) if task_results else len(points)
+    n_div = total_splits
     pass_rate = f"{n_pass / len(runs):.0%}" if runs else "0%"
 
     # Legend
@@ -113,12 +116,18 @@ def _render_task_section(
     safe_tid: str,
     runs: list[Run],
     alignment: Alignment,
-    points: list[DivergencePoint],
-    findings: list,
+    splits: list,
+    Z,
+    dendro: dict,
 ) -> str:
+    from moirai.schema import SplitDivergence
+
     n_pass = sum(1 for r in runs if r.result.success)
     n_fail = len(runs) - n_pass
     n_cols = len(alignment.matrix[0])
+
+    # Filter to meaningful splits (separation > 0.3)
+    significant = [s for s in splits if s.separation > 0.3]
 
     s = f'<div class="task-panel" id="task-{safe_tid}">'
     s += f'<div class="task-header"><span class="task-name">{tid}</span>'
@@ -127,13 +136,13 @@ def _render_task_section(
     s += f'<span class="fail-count">{n_fail}F</span> '
     s += f'{n_cols} cols</span></div>'
 
-    s += _clustering_interpretation(alignment, runs)
-    s += f'<div class="heatmap-container">{_build_dendrogram_heatmap(alignment, runs, points, safe_tid)}</div>'
+    s += _clustering_interpretation_from_splits(splits, runs)
+    s += f'<div class="heatmap-container">{_build_dendrogram_heatmap(alignment, runs, significant, Z, dendro, safe_tid)}</div>'
 
-    if findings:
+    if significant:
         s += '<div class="fork-cards">'
-        for i, finding in enumerate(findings, 1):
-            s += _build_fork_card(finding, number=i, task_id=safe_tid)
+        for i, split in enumerate(significant, 1):
+            s += _build_split_card(split, number=i, task_id=safe_tid)
         s += '</div>'
 
     s += '</div>'
@@ -144,7 +153,7 @@ def _render_task_section(
 # Clustering interpretation
 # ---------------------------------------------------------------------------
 
-def _clustering_interpretation(alignment: Alignment, runs: list[Run]) -> str:
+def _clustering_interpretation_from_splits(splits: list, runs: list[Run]) -> str:
     if len(runs) < 3:
         return ""
 
@@ -153,39 +162,23 @@ def _clustering_interpretation(alignment: Alignment, runs: list[Run]) -> str:
     if n_pass == 0 or n_fail == 0:
         return ""
 
-    try:
-        from moirai.analyze.align import distance_matrix
-        from scipy.cluster.hierarchy import linkage, dendrogram as scipy_dendrogram
+    significant = [s for s in splits if s.separation > 0.3]
+    if not significant:
+        return f'<div class="cluster-interpretation" style="color:var(--text-muted)">No significant structural divergence across {len(runs)} runs.</div>'
 
-        condensed = distance_matrix(runs, level="name")
-        if len(condensed) == 0:
-            return ""
-        Z = linkage(condensed, method="average")
-        result = scipy_dendrogram(Z, no_plot=True)
-        leaves = result["leaves"]
-    except Exception:
-        return ""
+    predictive = [s for s in significant if s.p_value is not None and s.p_value < 0.2]
 
-    success_map = {r.run_id: r.result.success for r in runs}
-    outcomes = [success_map.get(alignment.run_ids[i]) for i in leaves]
-    best_purity = 0.0
-    for split in range(1, len(outcomes)):
-        left = outcomes[:split]
-        right = outcomes[split:]
-        lp = sum(1 for o in left if o is True)
-        rp = sum(1 for o in right if o is True)
-        left_purity = max(lp, len(left) - lp) / len(left)
-        right_purity = max(rp, len(right) - rp) / len(right)
-        avg = (left_purity * len(left) + right_purity * len(right)) / len(outcomes)
-        if avg > best_purity:
-            best_purity = avg
-
-    if best_purity >= 0.9:
-        msg, color = "Pass and fail runs cluster separately — trajectory structure predicts outcome.", "var(--success)"
-    elif best_purity >= 0.75:
-        msg, color = "Partial clustering by outcome — similar trajectories tend toward similar results.", "var(--accent)"
+    if predictive:
+        best = min(predictive, key=lambda s: s.p_value or 1.0)
+        left_top = max(best.left_values, key=best.left_values.get) if best.left_values else "?"
+        right_top = max(best.right_values, key=best.right_values.get) if best.right_values else "?"
+        lr = f"{best.left_success_rate:.0%}" if best.left_success_rate is not None else "?"
+        rr = f"{best.right_success_rate:.0%}" if best.right_success_rate is not None else "?"
+        msg = f"Key split at column {best.column}: <code>{left_top}</code> ({lr} pass) vs <code>{right_top}</code> ({rr} pass), p={best.p_value:.3f}"
+        color = "var(--success)" if best.p_value < 0.05 else "var(--accent)"
     else:
-        msg, color = "No outcome clustering — divergence is at individual decision points, not overall structure.", "var(--text-muted)"
+        msg = f"{len(significant)} structural split{'s' if len(significant) != 1 else ''}, none significantly predict outcome."
+        color = "var(--text-muted)"
 
     return f'<div class="cluster-interpretation" style="color:{color}">{msg}</div>'
 
@@ -194,12 +187,25 @@ def _clustering_interpretation(alignment: Alignment, runs: list[Run]) -> str:
 # Fork cards
 # ---------------------------------------------------------------------------
 
-def _build_fork_card(finding, number: int | None = None, task_id: str = "") -> str:
-    p_str = f"p={finding.p_value:.3f}" if finding.p_value is not None else ""
-    div_col = finding.fork_column
+def _build_split_card(split, number: int | None = None, task_id: str = "") -> str:
+    """Render a card for a dendrogram split divergence."""
+    p_str = f"p={split.p_value:.3f}" if split.p_value is not None else ""
+    col = split.column
 
     card_id = f'fork-{task_id}-{number}' if number and task_id else ""
-    hover = f'@mouseenter="highlightCol(\'{task_id}\', {div_col})" @mouseleave="clearHighlight()"' if task_id else ""
+    hover = f'@mouseenter="highlightCol(\'{task_id}\', {col})" @mouseleave="clearHighlight()"' if task_id else ""
+
+    # Summary: what separates the two subtrees
+    left_top = max(split.left_values, key=split.left_values.get) if split.left_values else "?"
+    right_top = max(split.right_values, key=split.right_values.get) if split.right_values else "?"
+    lr = f"{split.left_success_rate:.0%}" if split.left_success_rate is not None else "?"
+    rr = f"{split.right_success_rate:.0%}" if split.right_success_rate is not None else "?"
+
+    summary = (
+        f"At column {col}, {len(split.left_runs)} runs chose "
+        f"<code>{left_top}</code> ({lr} pass) while "
+        f"{len(split.right_runs)} runs chose <code>{right_top}</code> ({rr} pass)."
+    )
 
     s = f'<div class="fork-card" id="{card_id}" {hover}>'
     s += '<div class="fork-card-header">'
@@ -207,55 +213,39 @@ def _build_fork_card(finding, number: int | None = None, task_id: str = "") -> s
         s += f'<span class="fork-number" @click="scrollToHeatmap(\'{task_id}\', {number})">{number}</span>'
     elif number is not None:
         s += f'<span class="fork-number">{number}</span>'
-    s += f'<span class="fork-summary">{finding.summary}</span></div>'
+    s += f'<span class="fork-summary">{summary}</span></div>'
+
+    meta_parts = []
     if p_str:
-        s += f'<div class="fork-pvalue">{p_str}</div>'
+        meta_parts.append(p_str)
+    meta_parts.append(f"separation: {split.separation:.0%}")
+    meta_parts.append(f"merge distance: {split.merge_distance:.3f}")
+    s += f'<div class="fork-pvalue">{" · ".join(meta_parts)}</div>'
 
-    for branch in finding.branches:
-        rate = branch.success_rate
-        if rate is not None and rate >= 0.6:
-            cls, rate_cls = "branch-success", "success"
-        elif rate is not None and rate <= 0.2:
-            cls, rate_cls = "branch-failure", "failure"
-        else:
-            cls, rate_cls = "branch-mixed", ""
+    # Left subtree branch
+    s += _split_branch_html(split.left_values, split.left_success_rate, len(split.left_runs), "left subtree")
+    # Right subtree branch
+    s += _split_branch_html(split.right_values, split.right_success_rate, len(split.right_runs), "right subtree")
 
-        rate_str = f"{rate:.0%}" if rate is not None else "?"
-        s += f'<div class="branch {cls}">'
-        s += f'<div class="branch-header"><span class="branch-rate {rate_cls}">{rate_str}</span> — {branch.run_count} runs chose <code>{branch.value}</code></div>'
+    s += '</div>'
+    return s
 
-        # Windowed trajectory
-        fp = branch.fork_position
-        w_start = max(0, fp - 4)
-        w_end = min(len(branch.steps), fp + 5)
-        windowed = branch.steps[w_start:w_end]
 
-        parts = []
-        for step in windowed:
-            if step.is_fork:
-                label = f'<span class="fork-step">{step.enriched_name}</span>'
-            else:
-                label = step.enriched_name
-            if step.detail:
-                detail = os.path.basename(step.detail) if "/" in step.detail else step.detail
-                if len(detail) > 30:
-                    detail = detail[:27] + "..."
-                label += f' <span style="color:#484f58">{detail}</span>'
-            parts.append(label)
+def _split_branch_html(values: dict[str, int], success_rate: float | None, n_runs: int, label: str) -> str:
+    rate = success_rate
+    if rate is not None and rate >= 0.6:
+        cls, rate_cls = "branch-success", "success"
+    elif rate is not None and rate <= 0.2:
+        cls, rate_cls = "branch-failure", "failure"
+    else:
+        cls, rate_cls = "branch-mixed", ""
 
-        if w_start > 0:
-            parts.insert(0, '<span style="color:var(--border)">...</span>')
-        if w_end < len(branch.steps):
-            parts.append('<span style="color:var(--border)">...</span>')
+    rate_str = f"{rate:.0%}" if rate is not None else "?"
+    vals_str = ", ".join(f"<code>{v}</code> ({c})" for v, c in sorted(values.items(), key=lambda x: -x[1]))
 
-        s += f'<div class="branch-trajectory">{" → ".join(parts)}</div>'
-
-        if branch.reasoning:
-            s += f'<div class="branch-reasoning">"{branch.reasoning[:200]}"</div>'
-
-        s += f'<div class="branch-run-id">{branch.representative_run_id}</div>'
-        s += '</div>'
-
+    s = f'<div class="branch {cls}">'
+    s += f'<div class="branch-header"><span class="branch-rate {rate_cls}">{rate_str} pass</span> — {n_runs} runs ({label})</div>'
+    s += f'<div class="branch-trajectory">Values: {vals_str}</div>'
     s += '</div>'
     return s
 
@@ -295,7 +285,9 @@ def _scipy_coords_to_svg(
 def _build_dendrogram_heatmap(
     alignment: Alignment,
     runs: list[Run],
-    points: list[DivergencePoint],
+    splits: list,
+    Z,
+    dendro: dict,
     task_id: str = "",
 ) -> str:
     if not alignment.matrix or not alignment.matrix[0]:
@@ -326,23 +318,16 @@ def _build_dendrogram_heatmap(
             details.append(detail)
         step_details[run.run_id] = details
 
-    # Dendrogram ordering
+    # Dendrogram ordering from precomputed data
     dendro_paths: list[str] = []
     leaf_order: list[int] = list(range(n_runs))
     dendro_w = 0
 
-    if n_runs >= 2:
-        from moirai.analyze.align import distance_matrix
-        from scipy.cluster.hierarchy import linkage, dendrogram as scipy_dendrogram
-
-        condensed = distance_matrix(runs, level=alignment.level if alignment.level == "name" else "name")
-        if len(condensed) > 0:
-            Z = linkage(condensed, method="average")
-            result = scipy_dendrogram(Z, no_plot=True)
-            leaf_order = list(result["leaves"])
-            cell_h_tmp = max(8, min(16, 500 // max(n_runs, 1)))
-            dendro_w = 100
-            dendro_paths = _scipy_coords_to_svg(result["icoord"], result["dcoord"], cell_h_tmp, dendro_w)
+    if dendro and "leaves" in dendro:
+        leaf_order = list(dendro["leaves"])
+        cell_h_tmp = max(8, min(16, 500 // max(n_runs, 1)))
+        dendro_w = 100
+        dendro_paths = _scipy_coords_to_svg(dendro["icoord"], dendro["dcoord"], cell_h_tmp, dendro_w)
 
     # Layout
     cell_w = max(8, min(16, 900 // max(n_cols, 1)))
@@ -367,18 +352,53 @@ def _build_dendrogram_heatmap(
         parts.extend(dendro_paths)
         parts.append('</g>')
 
-    # Numbered divergence markers
+    # Numbered divergence markers from splits + connector lines from dendrogram
     div_columns: dict[int, int] = {}
-    for i, p in enumerate(points):
-        if p.column < n_cols:
-            div_columns[p.column] = i + 1
+    split_connectors: list[str] = []
+
+    max_d = max(max(d) for d in dendro["dcoord"]) if dendro.get("dcoord") else 1.0
+    if max_d == 0:
+        max_d = 1.0
+
+    for i, sp in enumerate(splits):
+        if sp.column < n_cols:
+            num = i + 1
+            div_columns[sp.column] = num
+
+            col_x = heatmap_x + sp.column * cell_w + cell_w // 2
+
+            # Find the dendrogram branch point for this split's merge distance
+            # The branch point is at x = dendro_w * (1 - merge_dist/max_d),
+            # y = average of the two subtree centers
+            if dendro_w > 0:
+                branch_x = dendro_w * (1 - sp.merge_distance / max_d)
+                # Approximate branch y: average of left and right subtree leaf positions
+                left_rows = [leaf_order.index(alignment.run_ids.index(rid)) for rid in sp.left_runs if rid in alignment.run_ids]
+                right_rows = [leaf_order.index(alignment.run_ids.index(rid)) for rid in sp.right_runs if rid in alignment.run_ids]
+                if left_rows and right_rows:
+                    branch_y = y_off + ((sum(left_rows) / len(left_rows) + sum(right_rows) / len(right_rows)) / 2) * cell_h + cell_h / 2
+                    # Connector: dashed line from branch point to column marker
+                    is_sig = sp.p_value is not None and sp.p_value < 0.2
+                    stroke_color = "#d29922" if is_sig else "#484f58"
+                    stroke_opacity = "0.5" if is_sig else "0.2"
+                    split_connectors.append(
+                        f'<path d="M {branch_x:.1f},{branch_y:.1f} '
+                        f'C {(branch_x + col_x) / 2:.1f},{branch_y:.1f} '
+                        f'{(branch_x + col_x) / 2:.1f},{marker_h // 2 + 1:.1f} '
+                        f'{col_x:.1f},{marker_h // 2 + 1:.1f}" '
+                        f'fill="none" stroke="{stroke_color}" stroke-width="1" '
+                        f'stroke-dasharray="3,3" opacity="{stroke_opacity}"/>'
+                    )
 
     for col, num in div_columns.items():
         x = heatmap_x + col * cell_w + cell_w // 2
-        parts.append(f'<line x1="{x}" y1="{marker_h}" x2="{x}" y2="{svg_h}" stroke="#d29922" stroke-width="0.5" opacity="0.2" data-col="{col}"/>')
+        parts.append(f'<line x1="{x}" y1="{marker_h}" x2="{x}" y2="{svg_h}" stroke="#d29922" stroke-width="0.5" opacity="0.15" data-col="{col}"/>')
         click = f' @click="scrollToFork(\'{task_id}\', {num})" style="cursor:pointer"' if task_id else ""
         parts.append(f'<circle cx="{x}" cy="{marker_h // 2 + 1}" r="7" fill="#d29922" data-div-num="{num}"{click}/>')
         parts.append(f'<text x="{x}" y="{marker_h // 2 + 4}" text-anchor="middle" fill="#0d1117" font-size="9" font-weight="700" style="pointer-events:none">{num}</text>')
+
+    # Draw connectors after markers so they render on top
+    parts.extend(split_connectors)
 
     # Rows
     for row_idx, orig_idx in enumerate(leaf_order):

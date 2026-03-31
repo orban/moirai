@@ -1,7 +1,11 @@
 """Tests for HTML visualization: dendrogram + heatmap."""
 
-from moirai.schema import Step, Result, Run, Alignment, DivergencePoint, GAP
+import numpy as np
+from scipy.cluster.hierarchy import dendrogram as scipy_dendrogram, linkage
+
+from moirai.schema import Step, Result, Run, Alignment, GAP
 from moirai.viz.html import _build_dendrogram_heatmap, _scipy_coords_to_svg
+from moirai.analyze.splits import find_split_divergences
 
 
 def _make_run(run_id: str, names: list[str], success: bool) -> Run:
@@ -22,10 +26,9 @@ class TestBuildDendrogramHeatmap:
             matrix=[["read", "edit", "test"], ["read", "edit", "bash"], ["read", "edit", "test"]],
             level="name",
         )
-        points = [DivergencePoint(column=2, value_counts={"test": 2, "bash": 1}, entropy=0.9,
-                                  success_by_value={"test": 1.0, "bash": 0.0})]
 
-        svg = _build_dendrogram_heatmap(alignment, runs, points)
+        splits, Z, dendro = find_split_divergences(alignment, runs)
+        svg = _build_dendrogram_heatmap(alignment, runs, splits, Z, dendro)
 
         assert "<path" in svg  # dendrogram bracket paths
         assert "#3fb950" in svg  # green outcome strip (pass)
@@ -41,7 +44,7 @@ class TestBuildDendrogramHeatmap:
             level="name",
         )
 
-        svg = _build_dendrogram_heatmap(alignment, runs, [])
+        svg = _build_dendrogram_heatmap(alignment, runs, [], None, {})
 
         assert "<path" not in svg  # no dendrogram
         assert "<rect" in svg  # heatmap cells still present
@@ -60,18 +63,14 @@ class TestBuildDendrogramHeatmap:
             level="name",
         )
 
-        # Should not raise — zero max distance is guarded
-        svg = _build_dendrogram_heatmap(alignment, runs, [])
+        splits, Z, dendro = find_split_divergences(alignment, runs)
+        svg = _build_dendrogram_heatmap(alignment, runs, splits, Z, dendro)
         assert "<svg" in svg
 
 
 class TestScipyCoordsToSvg:
     def test_basic_brackets(self):
         """Known 3-item dendrogram should produce 2 bracket paths."""
-        # scipy dendrogram for 3 items produces 2 merges
-        # Leaf positions: 5, 15, 25
-        # First merge: items at 5 and 15 merge at some distance
-        # Second merge: result merges with item at 25
         icoord = [[5.0, 5.0, 15.0, 15.0], [10.0, 10.0, 25.0, 25.0]]
         dcoord = [[0.0, 0.5, 0.5, 0.0], [0.0, 1.0, 1.0, 0.0]]
 

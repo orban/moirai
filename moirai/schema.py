@@ -96,6 +96,25 @@ class DivergencePoint:
 
 
 @dataclass
+class SplitDivergence:
+    """A divergence derived from a dendrogram split."""
+    node_id: int                          # internal node in linkage matrix
+    left_runs: list[str]                  # run_ids in left subtree
+    right_runs: list[str]                 # run_ids in right subtree
+    merge_distance: float                 # linkage distance at this split
+    column: int                           # most discriminating alignment column
+    separation: float                     # 0-1: how well the column separates the subtrees
+    left_values: dict[str, int]           # value_counts in left subtree at column
+    right_values: dict[str, int]          # value_counts in right subtree at column
+    left_success_rate: float | None       # pass rate of left subtree
+    right_success_rate: float | None      # pass rate of right subtree
+    p_value: float | None = None          # Fisher's: does this split predict outcome?
+    # SVG coordinates (filled by renderer)
+    svg_x: float = 0.0
+    svg_y: float = 0.0
+
+
+@dataclass
 class CohortDiff:
     a_summary: RunSummary
     b_summary: RunSummary
