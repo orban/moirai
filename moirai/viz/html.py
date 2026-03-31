@@ -239,14 +239,148 @@ def _build_run_comparison(split, run_map: dict[str, Run], number: int | None = N
     if split.p_value is not None:
         s += f'<div class="fork-pvalue">p={split.p_value:.3f} · separation: {split.separation:.0%}</div>'
 
-    # Side-by-side comparison
-    s += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">'
-    s += _render_run_column(pass_run, col, is_pass=True)
-    s += _render_run_column(fail_run, col, is_pass=False)
-    s += '</div>'
+    # Align the two runs with NW to find matching/divergent steps
+    from moirai.analyze.align import _nw_align
+    from moirai.compress import step_enriched_name
+
+    pass_steps = [(step, step_enriched_name(step)) for step in pass_run.steps if step_enriched_name(step) is not None]
+    fail_steps = [(step, step_enriched_name(step)) for step in fail_run.steps if step_enriched_name(step) is not None]
+
+    pass_names = [name for _, name in pass_steps]
+    fail_names = [name for _, name in fail_steps]
+    aligned_pass, aligned_fail = _nw_align(pass_names, fail_names)
+
+    # Find first divergence point
+    first_div = None
+    for idx, (a, b) in enumerate(zip(aligned_pass, aligned_fail)):
+        if a != b:
+            first_div = idx
+            break
+
+    # Generate narrative
+    if first_div is not None:
+        pa = aligned_pass[first_div]
+        fa = aligned_fail[first_div]
+
+        # Get detail for the divergent steps
+        p_detail = _find_step_detail(pass_steps, pa, aligned_pass, first_div)
+        f_detail = _find_step_detail(fail_steps, fa, aligned_fail, first_div)
+
+        pa_display = f"<code>{pa}</code>" if pa != GAP else "nothing"
+        fa_display = f"<code>{fa}</code>" if fa != GAP else "nothing"
+        p_extra = f" ({p_detail})" if p_detail else ""
+        f_extra = f" ({f_detail})" if f_detail else ""
+
+        narrative = (
+            f'After {first_div} identical steps, these runs diverge: '
+            f'the pass run chose {pa_display}{p_extra} '
+            f'while the fail run chose {fa_display}{f_extra}.'
+        )
+        s += f'<div style="font-size:12px;color:var(--text);margin:12px 0;line-height:1.5">{narrative}</div>'
+
+        # Show reasoning at the divergence point if available
+        p_reasoning = _find_step_reasoning(pass_steps, aligned_pass, first_div)
+        f_reasoning = _find_step_reasoning(fail_steps, aligned_fail, first_div)
+        if p_reasoning or f_reasoning:
+            s += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:8px 0">'
+            if p_reasoning:
+                s += f'<div style="font-size:10px;color:var(--text-muted);font-style:italic;padding:6px 10px;background:rgba(63,185,80,0.06);border-left:2px solid var(--success);border-radius:3px"><span style="color:var(--success);font-weight:600">Pass reasoning:</span> {p_reasoning[:250]}</div>'
+            else:
+                s += '<div></div>'
+            if f_reasoning:
+                s += f'<div style="font-size:10px;color:var(--text-muted);font-style:italic;padding:6px 10px;background:rgba(248,81,73,0.06);border-left:2px solid var(--failure);border-radius:3px"><span style="color:var(--failure);font-weight:600">Fail reasoning:</span> {f_reasoning[:250]}</div>'
+            else:
+                s += '<div></div>'
+            s += '</div>'
+
+    # Aligned diff view
+    s += '<div style="margin-top:12px;font-size:10px;overflow-x:auto">'
+    s += '<table style="width:100%;border-collapse:collapse">'
+    s += '<tr><th style="width:50%;text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">'
+    s += f'<span style="color:var(--success);font-weight:600">PASS</span> <span style="color:var(--text-muted)">{pass_run.run_id}</span></th>'
+    s += f'<th style="width:50%;text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">'
+    s += f'<span style="color:var(--failure);font-weight:600">FAIL</span> <span style="color:var(--text-muted)">{fail_run.run_id}</span></th></tr>'
+
+    pass_orig_idx = 0
+    fail_orig_idx = 0
+    for idx, (a, b) in enumerate(zip(aligned_pass, aligned_fail)):
+        is_match = (a == b)
+        is_div_point = (idx == first_div)
+
+        if is_div_point:
+            row_bg = "background:rgba(210,153,34,0.08);"
+            border = "border-left:3px solid var(--accent);"
+        elif is_match:
+            row_bg = ""
+            border = "border-left:3px solid transparent;"
+        else:
+            row_bg = "background:rgba(210,153,34,0.04);"
+            border = "border-left:3px solid rgba(210,153,34,0.3);"
+
+        # Pass cell
+        if a == GAP:
+            p_cell = '<span style="color:var(--border)">—</span>'
+        else:
+            p_step, _ = pass_steps[pass_orig_idx] if pass_orig_idx < len(pass_steps) else (None, "")
+            p_detail_text = _step_detail_text(p_step) if p_step else ""
+            text_color = "var(--text-muted)" if is_match else "var(--text-bright)"
+            p_cell = f'<span style="color:{text_color}">{a}</span>'
+            if p_detail_text:
+                p_cell += f' <span style="color:#484f58">{p_detail_text}</span>'
+            pass_orig_idx += 1
+
+        # Fail cell
+        if b == GAP:
+            f_cell = '<span style="color:var(--border)">—</span>'
+        else:
+            f_step, _ = fail_steps[fail_orig_idx] if fail_orig_idx < len(fail_steps) else (None, "")
+            f_detail_text = _step_detail_text(f_step) if f_step else ""
+            text_color = "var(--text-muted)" if is_match else "var(--text-bright)"
+            f_cell = f'<span style="color:{text_color}">{b}</span>'
+            if f_detail_text:
+                f_cell += f' <span style="color:#484f58">{f_detail_text}</span>'
+            fail_orig_idx += 1
+
+        s += f'<tr style="{row_bg}"><td style="padding:2px 8px;{border}">{p_cell}</td><td style="padding:2px 8px;{border}">{f_cell}</td></tr>'
+
+    s += '</table></div>'
 
     s += '</div>'
     return s
+
+
+def _find_step_detail(steps: list[tuple], value: str, aligned: list[str], aligned_idx: int) -> str:
+    """Find the attrs detail for a step at an aligned position."""
+    orig_idx = sum(1 for i in range(aligned_idx) if aligned[i] != GAP)
+    if orig_idx < len(steps):
+        step, _ = steps[orig_idx]
+        return _step_detail_text(step)
+    return ""
+
+
+def _find_step_reasoning(steps: list[tuple], aligned: list[str], aligned_idx: int) -> str:
+    """Find the reasoning for a step at an aligned position."""
+    orig_idx = sum(1 for i in range(aligned_idx) if aligned[i] != GAP)
+    if orig_idx < len(steps):
+        step, _ = steps[orig_idx]
+        return step.output.get("reasoning", "") if step.output else ""
+    return ""
+
+
+def _step_detail_text(step) -> str:
+    """Get a short detail string from step attrs."""
+    if not step or not step.attrs:
+        return ""
+    fp = step.attrs.get("file_path", "")
+    if fp:
+        return os.path.basename(fp)
+    cmd = step.attrs.get("command", "")
+    if cmd:
+        return cmd[:50]
+    pat = step.attrs.get("pattern", "")
+    if pat:
+        return pat[:40]
+    return ""
 
 
 def _pick_best_run(runs: list[Run]) -> Run:
