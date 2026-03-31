@@ -410,6 +410,14 @@
               </div>
             </div>
 
+            <!-- Call to action -->
+            <div style="padding:12px 20px;border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle);background:var(--accent-dim)">
+              <div style="font-size:11px;color:var(--accent);font-weight:500;margin-bottom:4px">Get LLM analysis of this divergence</div>
+              <code style="font-size:10px;color:var(--text);background:var(--bg);padding:4px 8px;border-radius:3px;display:inline-block"
+                >moirai divergence <span x-text="'examples/eval_harness/ --task ' + task.id"></span></code>
+              <div style="font-size:10px;color:var(--text-muted);margin-top:4px">Outputs a structured comparison with full edit diffs, tool outputs, and test results — pipe to Claude Code or any LLM for analysis.</div>
+            </div>
+
             <!-- Aligned diff -->
             <div class="diff-wrap">
               <table class="diff">
