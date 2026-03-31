@@ -198,27 +198,15 @@ def _build_run_comparison(split, run_map: dict[str, Run], number: int | None = N
     Picks the best pair: one from each subtree with different outcomes.
     Shows their full step sequences with the divergence point marked.
     """
-    # Find a pass/fail pair across the split
-    left_pass = [rid for rid in split.left_runs if run_map.get(rid) and run_map[rid].result.success is True]
-    left_fail = [rid for rid in split.left_runs if run_map.get(rid) and run_map[rid].result.success is False]
-    right_pass = [rid for rid in split.right_runs if run_map.get(rid) and run_map[rid].result.success is True]
-    right_fail = [rid for rid in split.right_runs if run_map.get(rid) and run_map[rid].result.success is False]
+    # Collect all pass/fail runs from both subtrees
+    all_pass = [run_map[rid] for rid in split.left_runs + split.right_runs if run_map.get(rid) and run_map[rid].result.success is True]
+    all_fail = [run_map[rid] for rid in split.left_runs + split.right_runs if run_map.get(rid) and run_map[rid].result.success is False]
 
-    # Best pair: pass from one side, fail from the other
-    pass_run = fail_run = None
-    if left_pass and right_fail:
-        # Prefer runs with reasoning
-        pass_run = _pick_best_run([run_map[rid] for rid in left_pass])
-        fail_run = _pick_best_run([run_map[rid] for rid in right_fail])
-    elif right_pass and left_fail:
-        pass_run = _pick_best_run([run_map[rid] for rid in right_pass])
-        fail_run = _pick_best_run([run_map[rid] for rid in left_fail])
-    elif left_pass and left_fail:
-        pass_run = _pick_best_run([run_map[rid] for rid in left_pass])
-        fail_run = _pick_best_run([run_map[rid] for rid in left_fail])
-    elif right_pass and right_fail:
-        pass_run = _pick_best_run([run_map[rid] for rid in right_pass])
-        fail_run = _pick_best_run([run_map[rid] for rid in right_fail])
+    if not all_pass or not all_fail:
+        return None
+
+    # Pick the best pair: prefer same harness condition, then prefer runs with reasoning
+    pass_run, fail_run = _pick_best_pair(all_pass, all_fail)
 
     if not pass_run or not fail_run:
         return None
@@ -266,15 +254,30 @@ def _build_run_comparison(split, run_map: dict[str, Run], number: int | None = N
         p_detail = _find_step_detail(pass_steps, pa, aligned_pass, first_div)
         f_detail = _find_step_detail(fail_steps, fa, aligned_fail, first_div)
 
-        pa_display = f"<code>{pa}</code>" if pa != GAP else "nothing"
-        fa_display = f"<code>{fa}</code>" if fa != GAP else "nothing"
-        p_extra = f" ({p_detail})" if p_detail else ""
-        f_extra = f" ({f_detail})" if f_detail else ""
+        # Build readable descriptions
+        if pa == GAP:
+            p_desc = "skipped this step"
+        else:
+            p_desc = f"<code>{pa}</code>"
+            if p_detail:
+                p_desc += f" ({p_detail})"
+
+        if fa == GAP:
+            f_desc = "skipped this step"
+        else:
+            f_desc = f"<code>{fa}</code>"
+            if f_detail:
+                f_desc += f" ({f_detail})"
+
+        same_harness = pass_run.harness == fail_run.harness
+        harness_note = ""
+        if not same_harness:
+            harness_note = f' <span style="color:var(--text-muted)">(different conditions: {pass_run.harness} vs {fail_run.harness})</span>'
 
         narrative = (
-            f'After {first_div} identical steps, these runs diverge: '
-            f'the pass run chose {pa_display}{p_extra} '
-            f'while the fail run chose {fa_display}{f_extra}.'
+            f'After {first_div} identical step{"s" if first_div != 1 else ""}, these runs diverge: '
+            f'the pass run chose {p_desc} '
+            f'while the fail run chose {f_desc}.{harness_note}'
         )
         s += f'<div style="font-size:12px;color:var(--text);margin:12px 0;line-height:1.5">{narrative}</div>'
 
@@ -383,12 +386,42 @@ def _step_detail_text(step) -> str:
     return ""
 
 
-def _pick_best_run(runs: list[Run]) -> Run:
-    """Pick the most informative run — prefer one with reasoning data."""
-    with_reasoning = [r for r in runs if any(s.output.get("reasoning") for s in r.steps if s.output)]
-    if with_reasoning:
-        return with_reasoning[0]
-    return runs[0]
+def _pick_best_pair(pass_runs: list[Run], fail_runs: list[Run]) -> tuple[Run, Run]:
+    """Pick the best pass/fail pair for comparison.
+
+    Priority: same harness condition > both have reasoning > any pair.
+    """
+    def _has_reasoning(r: Run) -> bool:
+        return any(s.output.get("reasoning") for s in r.steps if s.output)
+
+    def _harness(r: Run) -> str:
+        return r.harness or ""
+
+    # Try same-condition pairs with reasoning first
+    for p in pass_runs:
+        for f in fail_runs:
+            if _harness(p) == _harness(f) and _has_reasoning(p) and _has_reasoning(f):
+                return p, f
+
+    # Same condition, at least one has reasoning
+    for p in pass_runs:
+        for f in fail_runs:
+            if _harness(p) == _harness(f) and (_has_reasoning(p) or _has_reasoning(f)):
+                return p, f
+
+    # Same condition, no reasoning
+    for p in pass_runs:
+        for f in fail_runs:
+            if _harness(p) == _harness(f):
+                return p, f
+
+    # Any pair with reasoning
+    for p in pass_runs:
+        for f in fail_runs:
+            if _has_reasoning(p) or _has_reasoning(f):
+                return p, f
+
+    return pass_runs[0], fail_runs[0]
 
 
 def _render_run_column(run: Run, divergence_col: int, is_pass: bool) -> str:
