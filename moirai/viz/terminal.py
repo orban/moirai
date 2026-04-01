@@ -477,6 +477,98 @@ def print_diff(diff: CohortDiff, a_label: str, b_label: str) -> None:
             console.print(f"  {compressed}  [dim]({count})[/dim]")
 
 
+def print_evidence(comparison) -> None:
+    """Print behavioral feature shifts between two variants."""
+    console.print(f"[bold]Variant comparison[/bold]")
+    console.print(f"  Baseline: {comparison.baseline_label}")
+    console.print(f"  Current:  {comparison.current_label}")
+    console.print(f"  Pass rate: {comparison.baseline_pass_rate:.0%} → {comparison.current_pass_rate:.0%} (delta: {comparison.pass_rate_delta:+.0%})")
+    console.print()
+
+    # Feature shifts table
+    table = Table(title="Behavioral feature shifts")
+    table.add_column("Feature", style="cyan")
+    table.add_column("Baseline", justify="right")
+    table.add_column("Current", justify="right")
+    table.add_column("Shift", justify="right")
+    table.add_column("Effect", justify="center")
+
+    for fs in comparison.feature_shifts:
+        if fs.feature == "AVG_STEP_COUNT":
+            b_str = f"{fs.baseline_value:.1f}"
+            c_str = f"{fs.current_value:.1f}"
+            s_str = f"{fs.shift:+.1f}"
+        else:
+            b_str = f"{fs.baseline_value:.2f}"
+            c_str = f"{fs.current_value:.2f}"
+            s_str = f"{fs.shift:+.2f}"
+
+        color = "green" if fs.magnitude == "negligible" else ("yellow" if fs.magnitude == "small" else "red")
+        table.add_row(fs.feature, b_str, c_str, f"[{color}]{s_str}[/{color}]", fs.magnitude)
+
+    console.print(table)
+
+    # Task breakdown
+    if comparison.task_breakdown:
+        console.print()
+        regressions = [tb for tb in comparison.task_breakdown if tb.delta < -0.1]
+        improvements = [tb for tb in comparison.task_breakdown if tb.delta > 0.1]
+
+        if regressions:
+            console.print(f"[red]Regressions ({len(regressions)} tasks):[/red]")
+            for tb in regressions[:5]:
+                console.print(f"  {tb.task_id}: {tb.baseline_pass_rate:.0%} → {tb.current_pass_rate:.0%} ({tb.delta:+.0%})")
+
+        if improvements:
+            console.print(f"[green]Improvements ({len(improvements)} tasks):[/green]")
+            for tb in improvements[:5]:
+                console.print(f"  {tb.task_id}: {tb.baseline_pass_rate:.0%} → {tb.current_pass_rate:.0%} ({tb.delta:+.0%})")
+
+
+def print_diagnosis(result) -> None:
+    """Print diagnosis result with ranked causes."""
+    console.print("[bold]Regression diagnosis[/bold]")
+    console.print(f"  Pass rate: {result.baseline_pass_rate:.0%} → {result.current_pass_rate:.0%}")
+    console.print()
+
+    # Feature shifts summary (top 4)
+    console.print("[bold]Behavioral shifts:[/bold]")
+    for fs in result.feature_shifts[:4]:
+        if abs(fs.shift) < 0.01:
+            continue
+        if fs.feature == "AVG_STEP_COUNT":
+            console.print(f"  {fs.feature:<30} {fs.baseline_value:.1f} → {fs.current_value:.1f}  shift={fs.shift:+.1f}  [{fs.magnitude}]")
+        else:
+            console.print(f"  {fs.feature:<30} {fs.baseline_value:.2f} → {fs.current_value:.2f}  shift={fs.shift:+.2f}  [{fs.magnitude}]")
+    console.print()
+
+    # Cause ranking
+    console.print("[bold]Cause ranking:[/bold]")
+    for i, cs in enumerate(result.cause_scores):
+        ci_str = f"[{cs.ci_lower:.2f}, {cs.ci_upper:.2f}]" if cs.ci_lower != cs.ci_upper else ""
+        matched = ", ".join(cs.matched_features) if cs.matched_features else "(none)"
+
+        if i == 0:
+            color = "bold green"
+        elif cs.score > 0.1:
+            color = "yellow"
+        else:
+            color = "dim"
+
+        console.print(f"  [{color}]#{i+1}  {cs.cause_id}: {cs.cause_description}[/{color}]")
+        console.print(f"      score: {cs.score:.2f}  {ci_str}")
+        console.print(f"      matched: {matched}")
+
+    if result.unknown_score > 0.01:
+        console.print(f"\n  [dim]Unknown/unmodeled: {result.unknown_score:.2f}[/dim]")
+
+    # Task breakdown summary
+    regressions = [tb for tb in result.task_breakdown if tb.delta < -0.1]
+    improvements = [tb for tb in result.task_breakdown if tb.delta > 0.1]
+    if regressions or improvements:
+        console.print(f"\n[bold]Per-task:[/bold] {len(regressions)} regressed, {len(improvements)} improved")
+
+
 def print_motifs(motifs: list, baseline: float, n_runs: int, n_tested: int = 0) -> None:
     """Print discriminative motif patterns.
 

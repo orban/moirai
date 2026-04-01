@@ -178,6 +178,68 @@ class GappedMotif:
         return " → ... → ".join(self.anchors)
 
 
+# --- Evidence and diagnosis dataclasses ---
+
+
+@dataclass
+class FeatureShift:
+    """A single behavioral feature comparison between variants."""
+    feature: str            # canonical name (e.g., "TEST_AFTER_EDIT_RATE")
+    baseline_value: float
+    current_value: float
+    shift: float            # current - baseline
+    effect_size: float      # Cohen's h for proportions, Cohen's d for means
+    ci_lower: float         # 95% CI on shift
+    ci_upper: float
+    magnitude: str          # "negligible", "small", "medium", "large"
+
+
+@dataclass
+class TaskBreakdown:
+    """Per-task success rate change between variants."""
+    task_id: str
+    baseline_pass_rate: float
+    current_pass_rate: float
+    delta: float
+    baseline_runs: int
+    current_runs: int
+
+
+@dataclass
+class VariantComparison:
+    """Complete structured comparison of two variants."""
+    baseline_label: str
+    current_label: str
+    baseline_pass_rate: float
+    current_pass_rate: float
+    pass_rate_delta: float
+    feature_shifts: list[FeatureShift]
+    task_breakdown: list[TaskBreakdown]
+
+
+@dataclass
+class CauseScore:
+    """Ranking result for a single candidate cause."""
+    cause_id: str
+    cause_description: str
+    score: float                    # normalized score (0-1)
+    ci_lower: float                 # bootstrap CI
+    ci_upper: float
+    matched_features: list[str]     # which features matched
+    evidence_strength: float        # raw pre-normalization score
+
+
+@dataclass
+class DiagnosisResult:
+    """Complete output of the cause ranking pipeline."""
+    cause_scores: list[CauseScore]  # sorted by score descending
+    unknown_score: float            # residual mass for unmodeled causes
+    feature_shifts: list[FeatureShift]
+    task_breakdown: list[TaskBreakdown]
+    baseline_pass_rate: float
+    current_pass_rate: float
+
+
 # --- Sequence extraction (analysis primitives, not normalization) ---
 
 def step_type_sequence(run: Run) -> list[str]:

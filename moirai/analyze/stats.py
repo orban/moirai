@@ -239,6 +239,53 @@ def _vectorized_p_values(
     return p_values
 
 
+# --- Effect sizes and confidence intervals ---
+
+
+def cohens_h(p1: float, p2: float) -> float:
+    """Cohen's h effect size for two proportions.
+
+    h = 2 × arcsin(sqrt(p1)) - 2 × arcsin(sqrt(p2))
+    Thresholds: |h| < 0.2 = small, 0.2-0.8 = medium, > 0.8 = large.
+    """
+    p1 = max(0.0, min(1.0, p1))
+    p2 = max(0.0, min(1.0, p2))
+    return 2 * math.asin(math.sqrt(p1)) - 2 * math.asin(math.sqrt(p2))
+
+
+def proportion_delta_ci(
+    baseline_p: float,
+    baseline_n: int,
+    current_p: float,
+    current_n: int,
+    z: float = 1.96,
+) -> tuple[float, float]:
+    """CI on the difference (current - baseline) of two independent proportions.
+
+    Wald interval. Acceptable for n >= 30; bootstrap for small samples.
+    """
+    if baseline_n == 0 or current_n == 0:
+        return (-1.0, 1.0)
+    se = math.sqrt(
+        baseline_p * (1 - baseline_p) / baseline_n
+        + current_p * (1 - current_p) / current_n
+    )
+    delta = current_p - baseline_p
+    return (delta - z * se, delta + z * se)
+
+
+def effect_magnitude(h: float) -> str:
+    """Classify effect size magnitude from Cohen's h."""
+    ah = abs(h)
+    if ah < 0.2:
+        return "negligible"
+    if ah < 0.5:
+        return "small"
+    if ah < 0.8:
+        return "medium"
+    return "large"
+
+
 # --- Internal helpers ---
 
 def _hypergeom_pmf(k: int, N: int, K: int, n: int) -> float | None:

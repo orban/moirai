@@ -560,6 +560,109 @@ def divergence(
             console.print("\n" + "=" * 80 + "\n")
 
 
+def _split_cohorts(
+    runs: list[Run],
+    baseline_filters: list[str],
+    current_filters: list[str],
+) -> tuple[list[Run], list[Run], str, str]:
+    """Split runs into baseline and current cohorts using K=V filters.
+
+    Returns (baseline_runs, current_runs, baseline_label, current_label).
+    Exits with error if either cohort is empty.
+    """
+    from moirai.filters import apply_kv_filters
+
+    try:
+        b_runs = apply_kv_filters(runs, baseline_filters)
+        c_runs = apply_kv_filters(runs, current_filters)
+    except ValueError as e:
+        err_console.print(f"[red]error:[/red] invalid filter: {e}")
+        raise typer.Exit(2)
+
+    if not b_runs:
+        err_console.print("[red]error:[/red] baseline matched 0 runs")
+        _show_available_values(runs, baseline_filters)
+        raise typer.Exit(1)
+    if not c_runs:
+        err_console.print("[red]error:[/red] current matched 0 runs")
+        _show_available_values(runs, current_filters)
+        raise typer.Exit(1)
+
+    return b_runs, c_runs, " ".join(baseline_filters), " ".join(current_filters)
+
+
+@app.command()
+def evidence(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    baseline: list[str] = typer.Option(..., "--baseline", help="Baseline filter (K=V, repeatable)"),
+    current: list[str] = typer.Option(..., "--current", help="Current filter (K=V, repeatable)"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """Extract behavioral feature shifts between two variants."""
+    runs = _load_and_filter(path, strict)
+    b_runs, c_runs, b_label, c_label = _split_cohorts(runs, baseline, current)
+
+    from moirai.analyze.evidence import compare_variants
+
+    result = compare_variants(b_runs, c_runs, baseline_label=b_label, current_label=c_label)
+
+    if json_output:
+        import json as json_mod
+        from dataclasses import asdict
+        console.print(json_mod.dumps(asdict(result), indent=2))
+    else:
+        from moirai.viz.terminal import print_evidence
+        print_evidence(result)
+
+
+@app.command()
+def diagnose(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    baseline: list[str] = typer.Option(..., "--baseline", help="Baseline filter (K=V, repeatable)"),
+    current: list[str] = typer.Option(..., "--current", help="Current filter (K=V, repeatable)"),
+    causes: Path = typer.Option(..., "--causes", help="Path to causes JSON file"),
+    bootstrap: int = typer.Option(0, "--bootstrap", help="Number of bootstrap iterations for CIs (0=skip)"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """Diagnose regression causes from trajectory evidence.
+
+    Compares two variants, extracts behavioral feature shifts, and ranks
+    candidate causes by evidence strength. Uses existing tag filters
+    (e.g., --baseline variant=baseline --current variant=current).
+    """
+    runs = _load_and_filter(path, strict)
+    b_runs, c_runs, _, _ = _split_cohorts(runs, baseline, current)
+
+    from moirai.analyze.evidence import compare_variants
+    from moirai.diagnose.causes import load_causes
+    from moirai.diagnose.ranking import bootstrap_confidence, score_causes
+
+    if not causes.exists():
+        err_console.print(f"[red]error:[/red] causes file not found: {causes}")
+        raise typer.Exit(1)
+
+    candidate_causes = load_causes(causes)
+    if not candidate_causes:
+        err_console.print("[red]error:[/red] no causes defined in file")
+        raise typer.Exit(1)
+
+    if bootstrap > 0:
+        result = bootstrap_confidence(b_runs, c_runs, candidate_causes, n_bootstrap=bootstrap)
+    else:
+        comparison = compare_variants(b_runs, c_runs)
+        result = score_causes(comparison, candidate_causes)
+
+    if json_output:
+        import json as json_mod
+        from dataclasses import asdict
+        console.print(json_mod.dumps(asdict(result), indent=2))
+    else:
+        from moirai.viz.terminal import print_diagnosis
+        print_diagnosis(result)
+
+
 def _show_available_values(runs: list[Run], kv_pairs: list[str]) -> None:
     """Show available values for filter keys to help the user."""
     from moirai.filters import parse_kv_filter

@@ -1,0 +1,33 @@
+[
+  {
+    "id": "C1",
+    "type": "prompt",
+    "description": "Removed testing instruction from system prompt",
+    "expected_shifts": {
+      "TEST_AFTER_EDIT_RATE": "decrease",
+      "ITERATIVE_FIX_RATE": "decrease",
+      "BLIND_SUBMIT_RATE": "increase"
+    },
+    "prior": 0.0
+  },
+  {
+    "id": "C2",
+    "type": "model",
+    "description": "Model upgrade (claude-3.5-sonnet to claude-4-sonnet)",
+    "expected_shifts": {
+      "AVG_STEP_COUNT": "decrease",
+      "REASONING_DENSITY": "increase"
+    },
+    "prior": 0.0
+  },
+  {
+    "id": "C3",
+    "type": "tool",
+    "description": "Tool timeout reduced from 120s to 60s",
+    "expected_shifts": {
+      "TOOL_TIMEOUT_ERROR_RATE": "increase",
+      "STEP_FAILURE_RATE": "increase"
+    },
+    "prior": 0.0
+  }
+]
