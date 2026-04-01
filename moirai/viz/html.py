@@ -733,24 +733,17 @@ def write_stream_html(
     template = template_path.read_text()
     import math
 
-    class _SafeEncoder(json.JSONEncoder):
-        """Replace NaN/Infinity with null for browser JSON.parse compatibility."""
-        def default(self, o):
-            return str(o)
+    def _sanitize(obj):
+        """Replace NaN/Infinity floats with None before JSON serialization."""
+        if isinstance(obj, float):
+            return None if (math.isnan(obj) or math.isinf(obj)) else obj
+        if isinstance(obj, dict):
+            return {k: _sanitize(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_sanitize(v) for v in obj]
+        return obj
 
-        def encode(self, o):
-            return super().encode(self._sanitize(o))
-
-        def _sanitize(self, o):
-            if isinstance(o, float) and (math.isnan(o) or math.isinf(o)):
-                return None
-            if isinstance(o, dict):
-                return {k: self._sanitize(v) for k, v in o.items()}
-            if isinstance(o, list):
-                return [self._sanitize(v) for v in o]
-            return o
-
-    data_json = _SafeEncoder().encode(payload).replace("</", "<\\/")
+    data_json = json.dumps(_sanitize(payload), default=str).replace("</", "<\\/")
     html_out = template.replace('"__DATA_PLACEHOLDER__"', data_json)
     path = Path(path)
     path.write_text(html_out)
