@@ -238,7 +238,6 @@ class DiagnosisResult:
     task_breakdown: list[TaskBreakdown]
     baseline_pass_rate: float
     current_pass_rate: float
-    stable_across_seeds: bool | None = None
 
 
 # --- Sequence extraction (analysis primitives, not normalization) ---

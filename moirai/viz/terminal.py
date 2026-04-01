@@ -479,8 +479,6 @@ def print_diff(diff: CohortDiff, a_label: str, b_label: str) -> None:
 
 def print_evidence(comparison) -> None:
     """Print behavioral feature shifts between two variants."""
-    from moirai.schema import VariantComparison
-
     console.print(f"[bold]Variant comparison[/bold]")
     console.print(f"  Baseline: {comparison.baseline_label}")
     console.print(f"  Current:  {comparison.current_label}")
@@ -529,8 +527,6 @@ def print_evidence(comparison) -> None:
 
 def print_diagnosis(result) -> None:
     """Print diagnosis result with ranked causes."""
-    from moirai.schema import DiagnosisResult
-
     console.print("[bold]Regression diagnosis[/bold]")
     console.print(f"  Pass rate: {result.baseline_pass_rate:.0%} → {result.current_pass_rate:.0%}")
     console.print()

@@ -559,6 +559,37 @@ def divergence(
             console.print("\n" + "=" * 80 + "\n")
 
 
+def _split_cohorts(
+    runs: list[Run],
+    baseline_filters: list[str],
+    current_filters: list[str],
+) -> tuple[list[Run], list[Run], str, str]:
+    """Split runs into baseline and current cohorts using K=V filters.
+
+    Returns (baseline_runs, current_runs, baseline_label, current_label).
+    Exits with error if either cohort is empty.
+    """
+    from moirai.filters import apply_kv_filters
+
+    try:
+        b_runs = apply_kv_filters(runs, baseline_filters)
+        c_runs = apply_kv_filters(runs, current_filters)
+    except ValueError as e:
+        err_console.print(f"[red]error:[/red] invalid filter: {e}")
+        raise typer.Exit(2)
+
+    if not b_runs:
+        err_console.print("[red]error:[/red] baseline matched 0 runs")
+        _show_available_values(runs, baseline_filters)
+        raise typer.Exit(1)
+    if not c_runs:
+        err_console.print("[red]error:[/red] current matched 0 runs")
+        _show_available_values(runs, current_filters)
+        raise typer.Exit(1)
+
+    return b_runs, c_runs, " ".join(baseline_filters), " ".join(current_filters)
+
+
 @app.command()
 def evidence(
     path: Path = typer.Argument(..., help="Path to a run file or directory"),
@@ -569,28 +600,10 @@ def evidence(
 ) -> None:
     """Extract behavioral feature shifts between two variants."""
     runs = _load_and_filter(path, strict)
+    b_runs, c_runs, b_label, c_label = _split_cohorts(runs, baseline, current)
 
-    from moirai.filters import apply_kv_filters
     from moirai.analyze.evidence import compare_variants
 
-    try:
-        b_runs = apply_kv_filters(runs, baseline)
-        c_runs = apply_kv_filters(runs, current)
-    except ValueError as e:
-        err_console.print(f"[red]error:[/red] invalid filter: {e}")
-        raise typer.Exit(2)
-
-    if not b_runs:
-        err_console.print("[red]error:[/red] baseline matched 0 runs")
-        _show_available_values(runs, baseline)
-        raise typer.Exit(1)
-    if not c_runs:
-        err_console.print("[red]error:[/red] current matched 0 runs")
-        _show_available_values(runs, current)
-        raise typer.Exit(1)
-
-    b_label = " ".join(baseline)
-    c_label = " ".join(current)
     result = compare_variants(b_runs, c_runs, baseline_label=b_label, current_label=c_label)
 
     if json_output:
@@ -619,27 +632,11 @@ def diagnose(
     (e.g., --baseline variant=baseline --current variant=current).
     """
     runs = _load_and_filter(path, strict)
+    b_runs, c_runs, _, _ = _split_cohorts(runs, baseline, current)
 
-    from moirai.filters import apply_kv_filters
     from moirai.analyze.evidence import compare_variants
     from moirai.diagnose.causes import load_causes
     from moirai.diagnose.ranking import bootstrap_confidence, score_causes
-
-    try:
-        b_runs = apply_kv_filters(runs, baseline)
-        c_runs = apply_kv_filters(runs, current)
-    except ValueError as e:
-        err_console.print(f"[red]error:[/red] invalid filter: {e}")
-        raise typer.Exit(2)
-
-    if not b_runs:
-        err_console.print("[red]error:[/red] baseline matched 0 runs")
-        _show_available_values(runs, baseline)
-        raise typer.Exit(1)
-    if not c_runs:
-        err_console.print("[red]error:[/red] current matched 0 runs")
-        _show_available_values(runs, current)
-        raise typer.Exit(1)
 
     if not causes.exists():
         err_console.print(f"[red]error:[/red] causes file not found: {causes}")

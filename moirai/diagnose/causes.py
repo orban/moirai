@@ -2,9 +2,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 
 @dataclass
@@ -15,7 +14,6 @@ class CandidateCause:
     description: str
     expected_shifts: dict[str, str]         # feature → "increase" | "decrease"
     prior: float = 0.0                      # 0 = uniform (auto-assigned before scoring)
-    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def load_causes(path: Path) -> list[CandidateCause]:
@@ -33,6 +31,5 @@ def load_causes(path: Path) -> list[CandidateCause]:
             description=item.get("description", ""),
             expected_shifts=item.get("expected_shifts", {}),
             prior=item.get("prior", 0.0),
-            metadata=item.get("metadata", {}),
         ))
     return causes

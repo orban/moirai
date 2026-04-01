@@ -102,11 +102,11 @@ def score_causes(
     )
     raw_scores["_unknown"] = unclaimed_shift
 
-    # Apply priors and exponentiate
+    # Apply priors and exponentiate (clamp to avoid overflow)
     weighted: dict[str, float] = {}
     for c in causes:
-        weighted[c.id] = priors[c.id] * math.exp(raw_scores[c.id])
-    weighted["_unknown"] = unk_prior * math.exp(raw_scores["_unknown"])
+        weighted[c.id] = priors[c.id] * math.exp(min(raw_scores[c.id], 50.0))
+    weighted["_unknown"] = unk_prior * math.exp(min(raw_scores["_unknown"], 50.0))
 
     # Normalize to simplex
     total = sum(weighted.values())

@@ -6,6 +6,7 @@ everything into a VariantComparison for downstream cause ranking.
 """
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from collections.abc import Callable
 
@@ -29,8 +30,18 @@ RATE_FEATURES = {
 }
 
 
+_names_cache: dict[int, list[str]] = {}
+
+
 def _enriched_names(run: Run) -> list[str]:
-    return [n for s in run.steps if (n := step_enriched_name(s)) is not None]
+    """Get enriched names, cached by object identity to avoid recomputation in bootstrap."""
+    key = id(run)
+    cached = _names_cache.get(key)
+    if cached is not None:
+        return cached
+    names = [n for s in run.steps if (n := step_enriched_name(s)) is not None]
+    _names_cache[key] = names
+    return names
 
 
 def _has_bigram(names: list[str], a: str, b: str) -> bool:
@@ -155,6 +166,7 @@ FEATURE_EXTRACTORS: dict[str, Callable[[list[Run]], float]] = {
 
 def extract_behavioral_features(runs: list[Run]) -> dict[str, float]:
     """Extract canonical behavioral features from a set of runs."""
+    _names_cache.clear()
     return {name: fn(runs) for name, fn in FEATURE_EXTRACTORS.items()}
 
 
@@ -190,7 +202,6 @@ def compare_variants(
             denom = max(abs(bv), abs(cv), 1.0)
             es = shift / denom
             # Rough CI via standard error of the mean
-            import math
             if len(baseline_runs) > 1 and len(current_runs) > 1:
                 b_vals = [len(r.steps) for r in baseline_runs]
                 c_vals = [len(r.steps) for r in current_runs]
@@ -209,7 +220,7 @@ def compare_variants(
             effect_size=es,
             ci_lower=ci_lo,
             ci_upper=ci_hi,
-            magnitude=effect_magnitude(es) if is_rate else effect_magnitude(es),
+            magnitude=effect_magnitude(es),
         ))
 
     # Sort by absolute shift descending
