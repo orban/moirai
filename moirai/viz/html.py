@@ -731,13 +731,26 @@ def write_stream_html(
 
     template_path = Path(__file__).parent / "templates" / "viewer.html"
     template = template_path.read_text()
-    def _sanitize_floats(obj):
-        """Replace NaN/Infinity with None for JSON safety."""
-        if isinstance(obj, float) and (obj != obj or obj == float("inf") or obj == float("-inf")):
-            return None
-        return str(obj)
+    import math
 
-    data_json = json.dumps(payload, default=_sanitize_floats).replace("</", "<\\/")
+    class _SafeEncoder(json.JSONEncoder):
+        """Replace NaN/Infinity with null for browser JSON.parse compatibility."""
+        def default(self, o):
+            return str(o)
+
+        def encode(self, o):
+            return super().encode(self._sanitize(o))
+
+        def _sanitize(self, o):
+            if isinstance(o, float) and (math.isnan(o) or math.isinf(o)):
+                return None
+            if isinstance(o, dict):
+                return {k: self._sanitize(v) for k, v in o.items()}
+            if isinstance(o, list):
+                return [self._sanitize(v) for v in o]
+            return o
+
+    data_json = _SafeEncoder().encode(payload).replace("</", "<\\/")
     html_out = template.replace('"__DATA_PLACEHOLDER__"', data_json)
     path = Path(path)
     path.write_text(html_out)
