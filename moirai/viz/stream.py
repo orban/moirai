@@ -57,7 +57,12 @@ def build_stream_tree(
         node_id = n_runs + i
         leaves_of[node_id] = leaves_of[int(left_node)] | leaves_of[int(right_node)]
 
-    root_node = n_runs + len(Z) - 1 if len(Z) > 0 else 0
+    if len(Z) > 0:
+        root_node = n_runs + len(Z) - 1
+    else:
+        # No linkage (0-1 runs): create a synthetic root covering all runs
+        root_node = n_runs  # virtual node
+        leaves_of[root_node] = set(range(n_runs))
 
     # Determine which internal nodes are worth splitting.
     split_nodes: set[int] = set()

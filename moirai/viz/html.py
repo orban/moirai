@@ -80,7 +80,8 @@ def write_branch_html(
     template = template_path.read_text(encoding="utf-8")
 
     # Inject JSON data (now without SVG strings)
-    html = template.replace('"__DATA_PLACEHOLDER__"', json.dumps(data, default=str))
+    data_json = json.dumps(data, default=str).replace("</", "<\\/")
+    html = template.replace('"__DATA_PLACEHOLDER__"', data_json)
 
     # Inject SVGs as hidden divs before </body>, referenced by task id
     svg_divs = "\n".join(
@@ -687,6 +688,59 @@ def write_diff_html(diff: CohortDiff, a_label: str, b_label: str, path: Path) ->
 
     fig.update_layout(title=f"{a_label} vs {b_label}", barmode="group", height=450)
     fig.write_html(str(path), include_plotlyjs=True)
+    return path
+
+
+def write_stream_html(
+    runs: list[Run],
+    task_results: list,
+    path: Path,
+) -> Path:
+    """Write the interactive heatmap viewer HTML."""
+    from moirai.viz.stream import build_stream_tree, build_run_meta, build_run_detail
+    from moirai.analyze.splits import find_split_divergences
+
+    tasks_data = []
+    all_runs_meta: dict[str, dict] = {}
+    all_run_details: dict[str, dict] = {}
+
+    for tid, task_runs, alignment, _points in task_results:
+        _splits, Z, _dendro = find_split_divergences(alignment, task_runs)
+        tree = build_stream_tree(alignment, task_runs, Z, _dendro)
+        tasks_data.append(tree)
+        for r in task_runs:
+            if r.run_id not in all_runs_meta:
+                all_runs_meta[r.run_id] = build_run_meta(r)
+                all_run_details[r.run_id] = build_run_detail(r)
+
+    legend = [(name, color) for name, color in STEP_COLORS.items()]
+
+    payload = {
+        "stats": {
+            "total_runs": len(runs),
+            "pass_rate": f"{sum(1 for r in runs if r.result.success) / len(runs) * 100:.0f}%" if runs else "0%",
+            "n_tasks": len(tasks_data),
+            "n_div": sum(len(t["bifurcations"]) for t in tasks_data),
+        },
+        "legend": legend,
+        "tasks": tasks_data,
+        "runs": all_runs_meta,
+        "run_details": all_run_details,
+        "step_colors": dict(STEP_COLORS),
+    }
+
+    template_path = Path(__file__).parent / "templates" / "viewer.html"
+    template = template_path.read_text()
+    def _sanitize_floats(obj):
+        """Replace NaN/Infinity with None for JSON safety."""
+        if isinstance(obj, float) and (obj != obj or obj == float("inf") or obj == float("-inf")):
+            return None
+        return str(obj)
+
+    data_json = json.dumps(payload, default=_sanitize_floats).replace("</", "<\\/")
+    html_out = template.replace('"__DATA_PLACEHOLDER__"', data_json)
+    path = Path(path)
+    path.write_text(html_out)
     return path
 
 
