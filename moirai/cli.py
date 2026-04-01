@@ -559,6 +559,112 @@ def divergence(
             console.print("\n" + "=" * 80 + "\n")
 
 
+@app.command()
+def evidence(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    baseline: list[str] = typer.Option(..., "--baseline", help="Baseline filter (K=V, repeatable)"),
+    current: list[str] = typer.Option(..., "--current", help="Current filter (K=V, repeatable)"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """Extract behavioral feature shifts between two variants."""
+    runs = _load_and_filter(path, strict)
+
+    from moirai.filters import apply_kv_filters
+    from moirai.analyze.evidence import compare_variants
+
+    try:
+        b_runs = apply_kv_filters(runs, baseline)
+        c_runs = apply_kv_filters(runs, current)
+    except ValueError as e:
+        err_console.print(f"[red]error:[/red] invalid filter: {e}")
+        raise typer.Exit(2)
+
+    if not b_runs:
+        err_console.print("[red]error:[/red] baseline matched 0 runs")
+        _show_available_values(runs, baseline)
+        raise typer.Exit(1)
+    if not c_runs:
+        err_console.print("[red]error:[/red] current matched 0 runs")
+        _show_available_values(runs, current)
+        raise typer.Exit(1)
+
+    b_label = " ".join(baseline)
+    c_label = " ".join(current)
+    result = compare_variants(b_runs, c_runs, baseline_label=b_label, current_label=c_label)
+
+    if json_output:
+        import json as json_mod
+        from dataclasses import asdict
+        console.print(json_mod.dumps(asdict(result), indent=2))
+    else:
+        from moirai.viz.terminal import print_evidence
+        print_evidence(result)
+
+
+@app.command()
+def diagnose(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    baseline: list[str] = typer.Option(..., "--baseline", help="Baseline filter (K=V, repeatable)"),
+    current: list[str] = typer.Option(..., "--current", help="Current filter (K=V, repeatable)"),
+    causes: Path = typer.Option(..., "--causes", help="Path to causes JSON file"),
+    bootstrap: int = typer.Option(0, "--bootstrap", help="Number of bootstrap iterations for CIs (0=skip)"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """Diagnose regression causes from trajectory evidence.
+
+    Compares two variants, extracts behavioral feature shifts, and ranks
+    candidate causes by evidence strength. Uses existing tag filters
+    (e.g., --baseline variant=baseline --current variant=current).
+    """
+    runs = _load_and_filter(path, strict)
+
+    from moirai.filters import apply_kv_filters
+    from moirai.analyze.evidence import compare_variants
+    from moirai.diagnose.causes import load_causes
+    from moirai.diagnose.ranking import bootstrap_confidence, score_causes
+
+    try:
+        b_runs = apply_kv_filters(runs, baseline)
+        c_runs = apply_kv_filters(runs, current)
+    except ValueError as e:
+        err_console.print(f"[red]error:[/red] invalid filter: {e}")
+        raise typer.Exit(2)
+
+    if not b_runs:
+        err_console.print("[red]error:[/red] baseline matched 0 runs")
+        _show_available_values(runs, baseline)
+        raise typer.Exit(1)
+    if not c_runs:
+        err_console.print("[red]error:[/red] current matched 0 runs")
+        _show_available_values(runs, current)
+        raise typer.Exit(1)
+
+    if not causes.exists():
+        err_console.print(f"[red]error:[/red] causes file not found: {causes}")
+        raise typer.Exit(1)
+
+    candidate_causes = load_causes(causes)
+    if not candidate_causes:
+        err_console.print("[red]error:[/red] no causes defined in file")
+        raise typer.Exit(1)
+
+    if bootstrap > 0:
+        result = bootstrap_confidence(b_runs, c_runs, candidate_causes, n_bootstrap=bootstrap)
+    else:
+        comparison = compare_variants(b_runs, c_runs)
+        result = score_causes(comparison, candidate_causes)
+
+    if json_output:
+        import json as json_mod
+        from dataclasses import asdict
+        console.print(json_mod.dumps(asdict(result), indent=2))
+    else:
+        from moirai.viz.terminal import print_diagnosis
+        print_diagnosis(result)
+
+
 def _show_available_values(runs: list[Run], kv_pairs: list[str]) -> None:
     """Show available values for filter keys to help the user."""
     from moirai.filters import parse_kv_filter
