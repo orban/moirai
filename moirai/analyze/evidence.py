@@ -89,15 +89,17 @@ def _blind_submit_rate(runs: list[Run]) -> float:
 
 
 def _tool_timeout_error_rate(runs: list[Run]) -> float:
-    """Fraction of steps with timeout or error status."""
-    total = 0
-    errors = 0
-    for r in runs:
-        for s in r.steps:
-            total += 1
-            if s.status in ("error", "timeout"):
-                errors += 1
-    return errors / total if total > 0 else 0.0
+    """Fraction of runs that hit at least one tool/bash error (not test failures)."""
+    if not runs:
+        return 0.0
+    count = sum(
+        1 for r in runs
+        if any(
+            s.status in ("error", "timeout") and s.name in ("bash", "execute", "unknown")
+            for s in r.steps
+        )
+    )
+    return count / len(runs)
 
 
 def _step_failure_rate(runs: list[Run]) -> float:

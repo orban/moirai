@@ -64,14 +64,16 @@ class TestExtractBehavioralFeatures:
         assert features["BLIND_SUBMIT_RATE"] == 0.5
 
     def test_tool_timeout_error_rate(self):
+        # Only bash/execute errors count, not test failures
         r1 = _make_run("r1", "t1", [
             _step("edit", "ok"),
-            _step("test", "error"),
-            _step("bash", "ok"),
+            _step("bash", "error"),
+            _step("test", "error"),  # test failure should NOT count
         ], False)
+        r2 = _make_run("r2", "t1", [_step("edit", "ok"), _step("test", "ok")], True)
 
-        features = extract_behavioral_features([r1])
-        assert abs(features["TOOL_TIMEOUT_ERROR_RATE"] - 1 / 3) < 0.01
+        features = extract_behavioral_features([r1, r2])
+        assert features["TOOL_TIMEOUT_ERROR_RATE"] == 0.5  # 1 of 2 runs has bash error
 
     def test_step_failure_rate(self):
         r1 = _make_run("r1", "t1", [
