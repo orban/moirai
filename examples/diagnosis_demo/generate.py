@@ -74,9 +74,7 @@ def _generate_trajectory(
         idx += 1
 
         if test_status == "error":
-            # Fix and re-test
-            steps.append(_step(idx, "read"))
-            idx += 1
+            # Fix and re-test (edit immediately after test failure → edit→test→edit trigram)
             steps.append(_step(idx, "edit", attrs={"file_path": "src/main.py"}))
             idx += 1
             steps.append(_step(idx, "test", "ok", attrs={"command": "python -m pytest"}))
