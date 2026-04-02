@@ -434,7 +434,10 @@ def run_explain(
 
         alignment = align_runs(group_runs, level="name")
         cons = consensus(alignment.matrix)
-        divpoints, _ = find_divergence_points(alignment, group_runs)
+        # Use q_threshold=1.0 to get ALL divergent columns regardless of
+        # statistical significance — the LLM does the interpretive work.
+        # Structural significance filtering is the wrong gate for content analysis.
+        divpoints, _ = find_divergence_points(alignment, group_runs, q_threshold=1.0)
 
         # Take top-N by entropy
         top_divpoints = sorted(divpoints, key=lambda d: d.entropy, reverse=True)[:top_n]
