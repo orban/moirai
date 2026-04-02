@@ -360,7 +360,7 @@ def _try_parse_json(text: str) -> dict | None:
 
 
 def invoke_llm(
-    prompt: str, mode: str, timeout: int = 60,
+    prompt: str, mode: str, timeout: int = 120,
 ) -> tuple[str | None, str | None]:
     """Call LLM CLI via subprocess.
 
@@ -382,7 +382,7 @@ def invoke_llm(
     # Build CLI args per tool
     cli_name = cli.rsplit("/", 1)[-1] if "/" in cli else cli
     if cli_name == "claude":
-        cmd = [cli, "-p", "-", "--output-format", "json"]
+        cmd = [cli, "-p", "-", "--output-format", "json", "--model", "sonnet"]
     elif cli_name == "codex":
         cmd = [cli, "--prompt", "-"]
     else:

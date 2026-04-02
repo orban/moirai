@@ -389,7 +389,7 @@ def explain(
     do_cluster: bool = typer.Option(False, "--cluster", help="Enable clustering + concordance"),
     fmt: str = typer.Option("terminal", "--format", help="Output format: terminal or json"),
     max_runs: int = typer.Option(50, "--max-runs", help="Cap runs per task group"),
-    timeout: int = typer.Option(60, "--timeout", help="LLM subprocess timeout in seconds"),
+    timeout: int = typer.Option(120, "--timeout", help="LLM subprocess timeout in seconds"),
     seed: int = typer.Option(42, "--seed", help="Random seed for sampling"),
     level: str = typer.Option("type", help="Alignment level for --run mode"),
     threshold: float = typer.Option(0.3, help="Cluster threshold for --run mode"),
