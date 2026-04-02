@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Moirai — Diagnosis Report</title>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Instrument+Serif:ital@0;1&display=swap');
+
+:root {
+  --bg: #08090c;
+  --surface: #0f1115;
+  --surface-2: #161a1f;
+  --border: #1e2328;
+  --border-bright: #2a3038;
+  --text: #c8cdd3;
+  --text-dim: #6b737d;
+  --text-bright: #e8ecf0;
+  --green: #2dd4a0;
+  --green-dim: rgba(45,212,160,0.10);
+  --red: #f0566a;
+  --red-dim: rgba(240,86,106,0.10);
+  --amber: #e8b84a;
+  --amber-dim: rgba(232,184,74,0.10);
+  --cyan: #56b8e0;
+  --cyan-dim: rgba(86,184,224,0.10);
+  --c-search: #4a7dbd;
+  --c-read: #5ba8c8;
+  --c-edit: #d4a24a;
+  --c-test: #2dd4a0;
+  --c-bash: #9570d4;
+  --c-submit: #6b737d;
+  --c-write: #40b89a;
+  --c-reason: #8a7060;
+  --c-finish: #6b737d;
+  --c-other: #3a3f45;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: 'DM Mono', monospace; }
+body::before {
+  content: ''; position: fixed; inset: 0;
+  background-image: linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.012) 1px, transparent 1px);
+  background-size: 40px 40px; pointer-events: none; z-index: 0;
+}
+
+.container { max-width: 1400px; margin: 0 auto; padding: 32px 24px; position: relative; z-index: 1; }
+
+/* Header */
+.header { margin-bottom: 32px; }
+.header-label { font-size: 10px; letter-spacing: 3px; text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; }
+.header h1 { font-family: 'Instrument Serif', serif; font-size: 30px; font-weight: 400; color: var(--text-bright); }
+.header h1 em { font-style: italic; color: var(--cyan); }
+
+/* Stats bar */
+.stats-bar {
+  display: flex; gap: 20px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; font-size: 11px; color: var(--text-dim); margin-bottom: 24px; flex-wrap: wrap;
+}
+.stats-bar .val { color: var(--text-bright); font-weight: 500; }
+
+/* Nav tabs */
+.nav { display: flex; gap: 2px; margin-bottom: 24px; }
+.nav-tab {
+  padding: 10px 20px; font-size: 12px; font-family: 'DM Mono', monospace; letter-spacing: 0.5px;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text-dim);
+  cursor: pointer; transition: all 0.15s ease; border-radius: 6px;
+}
+.nav-tab:hover { color: var(--text); border-color: var(--border-bright); }
+.nav-tab.active { color: var(--cyan); border-color: var(--cyan); background: var(--cyan-dim); }
+.nav-tab .tab-label { font-size: 10px; display: block; margin-top: 2px; color: var(--text-dim); }
+
+/* Panels */
+.panel { display: none; }
+.panel.active { display: block; animation: fadeIn 0.3s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Task selector */
+.task-select {
+  display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; align-items: center;
+}
+.task-pill {
+  padding: 6px 14px; font-size: 11px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; cursor: pointer; transition: all 0.15s ease; color: var(--text-dim);
+}
+.task-pill:hover { border-color: var(--border-bright); color: var(--text); }
+.task-pill.active { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-dim); }
+.task-pill .pill-rate { font-size: 10px; opacity: 0.7; }
+
+/* Section card */
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  overflow: hidden; margin-bottom: 20px;
+}
+.card-header {
+  padding: 14px 18px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.card-title { font-size: 12px; font-weight: 500; color: var(--text-bright); }
+.card-meta { font-size: 10px; color: var(--text-dim); }
+.card-body { padding: 20px 18px; }
+
+/* === FUNNEL === */
+.funnel-row {
+  display: flex; gap: 8px; align-items: stretch; margin-bottom: 12px; flex-wrap: wrap;
+}
+.funnel-node {
+  flex: 1; min-width: 120px; padding: 14px 16px; border-radius: 8px; border: 1px solid;
+  text-align: center; transition: transform 0.15s ease;
+}
+.funnel-node:hover { transform: translateY(-2px); }
+.funnel-node .fn-label { font-size: 12px; font-weight: 500; margin-bottom: 4px; }
+.funnel-node .fn-count { font-size: 10px; color: var(--text-dim); }
+.funnel-node .fn-rate { font-size: 22px; font-weight: 500; margin-top: 6px; }
+.funnel-node .fn-detail { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+.fn-green { border-color: var(--green); background: var(--green-dim); color: var(--green); }
+.fn-red { border-color: var(--red); background: var(--red-dim); color: var(--red); }
+.fn-amber { border-color: var(--amber); background: var(--amber-dim); color: var(--amber); }
+.fn-dim { border-color: var(--border); background: var(--surface-2); color: var(--text-dim); }
+.fn-cyan { border-color: var(--cyan); background: var(--cyan-dim); color: var(--cyan); }
+
+.funnel-arrow {
+  display: flex; align-items: center; font-size: 18px; color: var(--text-dim); padding: 0 4px;
+}
+.funnel-section-label {
+  font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--text-dim);
+  margin: 16px 0 8px;
+}
+.funnel-insight {
+  margin-top: 16px; padding: 12px 16px; border-left: 3px solid var(--cyan);
+  background: var(--surface-2); border-radius: 0 8px 8px 0; font-size: 12px; line-height: 1.6;
+}
+
+/* === STRIPS === */
+.strip-section { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+.strip-dot { width: 5px; height: 5px; border-radius: 50%; display: inline-block; }
+.strip-row { display: flex; align-items: center; height: 13px; margin-bottom: 1px; }
+.strip-border { width: 3px; height: 100%; border-radius: 1px; margin-right: 3px; flex-shrink: 0; }
+.strip-cells { display: flex; gap: 1px; flex: 1; }
+.strip-cell {
+  height: 11px; border-radius: 2px; flex: 1; max-width: 24px; min-width: 6px;
+  transition: transform 0.1s ease; cursor: default;
+}
+.strip-cell:hover { transform: scaleY(2); filter: brightness(1.3); z-index: 10; }
+.strip-sep { height: 1px; background: var(--border); margin: 8px 0; }
+.strip-legend { display: flex; gap: 12px; margin-top: 12px; flex-wrap: wrap; font-size: 10px; color: var(--text-dim); }
+.strip-legend-item { display: flex; align-items: center; gap: 4px; }
+.strip-legend-color { width: 10px; height: 10px; border-radius: 2px; }
+
+/* === TRANSITIONS === */
+.trans-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.trans-edge {
+  padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+  transition: border-color 0.15s ease; cursor: default;
+}
+.trans-edge:hover { border-color: var(--border-bright); }
+.trans-path { font-size: 12px; }
+.trans-arrow { color: var(--text-dim); margin: 0 6px; }
+.trans-stats { text-align: right; font-size: 10px; }
+.trans-rate { font-size: 14px; font-weight: 500; }
+.trans-count { color: var(--text-dim); }
+.trans-lift { font-size: 10px; margin-left: 4px; }
+.edge-green { background: var(--green-dim); }
+.edge-green .trans-rate { color: var(--green); }
+.edge-green .trans-lift { color: var(--green); }
+.edge-red { background: var(--red-dim); }
+.edge-red .trans-rate { color: var(--red); }
+.edge-red .trans-lift { color: var(--red); }
+.edge-neutral { background: var(--surface-2); }
+.edge-neutral .trans-rate { color: var(--text); }
+
+.trans-section-title {
+  font-size: 11px; letter-spacing: 1px; text-transform: uppercase; margin: 16px 0 10px;
+  display: flex; align-items: center; gap: 8px;
+}
+.trans-baseline {
+  font-size: 11px; color: var(--text-dim); margin-bottom: 16px;
+}
+
+/* Tooltip */
+.tooltip {
+  position: fixed; background: #1a1f25; border: 1px solid var(--border); border-radius: 5px;
+  padding: 4px 8px; font-size: 10px; color: var(--text-bright);
+  pointer-events: none; z-index: 100; display: none; white-space: nowrap;
+}
+</style>
+</head>
+<body>
+<div x-data="reportApp()" class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-label">Moirai / Diagnosis Report</div>
+    <h1>Trajectory <em>decision analysis</em></h1>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-bar">
+    <div><span class="val" x-text="data.summary.total_runs"></span> runs</div>
+    <div><span class="val" x-text="data.summary.total_tasks"></span> tasks</div>
+    <div><span class="val" x-text="data.summary.mixed_outcome_tasks"></span> mixed-outcome</div>
+    <div><span class="val" x-text="pct(data.summary.pass_rate)"></span> overall pass rate</div>
+  </div>
+
+  <!-- Nav -->
+  <div class="nav">
+    <div class="nav-tab" :class="{ active: tab === 'funnel' }" @click="tab = 'funnel'">
+      Decision Funnel
+      <span class="tab-label">per-task decision points</span>
+    </div>
+    <div class="nav-tab" :class="{ active: tab === 'transitions' }" @click="tab = 'transitions'">
+      Transition Map
+      <span class="tab-label">which patterns predict success</span>
+    </div>
+    <div class="nav-tab" :class="{ active: tab === 'strips' }" @click="tab = 'strips'">
+      Trajectory Strips
+      <span class="tab-label">raw aligned evidence</span>
+    </div>
+  </div>
+
+  <!-- FUNNEL PANEL -->
+  <div class="panel" :class="{ active: tab === 'funnel' }">
+    <template x-if="data.tasks.length > 0">
+      <div>
+        <!-- Task selector -->
+        <div class="task-select">
+          <template x-for="(t, i) in data.tasks" :key="i">
+            <div class="task-pill" :class="{ active: taskIdx === i }" @click="taskIdx = i">
+              <span x-text="shortTask(t.funnel.task_id)"></span>
+              <span class="pill-rate" x-text="t.funnel.pass_count + 'P/' + t.funnel.fail_count + 'F'"></span>
+            </div>
+          </template>
+        </div>
+
+        <!-- Active task funnel -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title" x-text="currentTask.funnel.task_id"></div>
+            <div class="card-meta" x-text="currentTask.funnel.total_runs + ' runs, ' + pct(currentTask.funnel.pass_rate) + ' pass'"></div>
+          </div>
+          <div class="card-body">
+            <!-- Start node -->
+            <div class="funnel-section-label">all runs start here</div>
+            <div class="funnel-row">
+              <div class="funnel-node fn-cyan">
+                <div class="fn-label" x-text="currentTask.funnel.nodes[0].label"></div>
+                <div class="fn-count" x-text="currentTask.funnel.nodes[0].count + ' runs'"></div>
+                <div class="fn-rate" x-text="pct(currentTask.funnel.nodes[0].pass_rate)"></div>
+                <div class="fn-detail">pass rate</div>
+              </div>
+            </div>
+
+            <!-- Decision branches -->
+            <div class="funnel-section-label">at the decision point, runs diverge</div>
+            <div class="funnel-row">
+              <template x-for="node in currentTask.funnel.nodes.slice(1)" :key="node.id">
+                <div class="funnel-node" :class="fnClass(node)">
+                  <div class="fn-label" x-text="node.label"></div>
+                  <div class="fn-count" x-text="node.count + ' runs'"></div>
+                  <div class="fn-rate" x-text="pct(node.pass_rate)"></div>
+                  <div class="fn-detail">pass rate</div>
+                </div>
+              </template>
+            </div>
+
+            <!-- Insight -->
+            <div class="funnel-insight" x-show="bestNode && worstNode">
+              <strong x-text="bestNode?.label"></strong>: <span x-text="pct(bestNode?.pass_rate)"></span> success
+              (<span x-text="bestNode?.count"></span> runs).
+              <strong x-text="worstNode?.label"></strong>: <span x-text="pct(worstNode?.pass_rate)"></span> success
+              (<span x-text="worstNode?.count"></span> runs).
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+    <template x-if="data.tasks.length === 0">
+      <div class="card"><div class="card-body" style="color:var(--text-dim)">No mixed-outcome tasks found. Need tasks with both passing and failing runs.</div></div>
+    </template>
+  </div>
+
+  <!-- TRANSITIONS PANEL -->
+  <div class="panel" :class="{ active: tab === 'transitions' }">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Step transitions that predict outcomes</div>
+        <div class="card-meta" x-text="data.transitions.total_runs + ' runs analyzed'"></div>
+      </div>
+      <div class="card-body">
+        <div class="trans-baseline">
+          Baseline pass rate: <span style="color:var(--text-bright)" x-text="pct(data.transitions.baseline_pass_rate)"></span>.
+          Transitions above baseline predict success; below predict failure.
+        </div>
+
+        <!-- Success transitions -->
+        <div class="trans-section-title" style="color:var(--green)">
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block"></span>
+          Success-predicting transitions
+        </div>
+        <div class="trans-grid">
+          <template x-for="e in successEdges" :key="e.source + e.target">
+            <div class="trans-edge edge-green">
+              <div class="trans-path">
+                <span x-text="e.source"></span>
+                <span class="trans-arrow">&rarr;</span>
+                <span x-text="e.target"></span>
+              </div>
+              <div class="trans-stats">
+                <span class="trans-rate" x-text="pct(e.pass_rate)"></span>
+                <span class="trans-lift" x-text="e.lift + 'x'"></span>
+                <div class="trans-count" x-text="e.count + ' runs'"></div>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- Failure transitions -->
+        <div class="trans-section-title" style="color:var(--red)">
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--red);display:inline-block"></span>
+          Failure-predicting transitions
+        </div>
+        <div class="trans-grid">
+          <template x-for="e in failureEdges" :key="e.source + e.target">
+            <div class="trans-edge edge-red">
+              <div class="trans-path">
+                <span x-text="e.source"></span>
+                <span class="trans-arrow">&rarr;</span>
+                <span x-text="e.target"></span>
+              </div>
+              <div class="trans-stats">
+                <span class="trans-rate" x-text="pct(e.pass_rate)"></span>
+                <span class="trans-lift" x-text="e.lift + 'x'"></span>
+                <div class="trans-count" x-text="e.count + ' runs'"></div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STRIPS PANEL -->
+  <div class="panel" :class="{ active: tab === 'strips' }">
+    <template x-if="data.tasks.length > 0">
+      <div>
+        <div class="task-select">
+          <template x-for="(t, i) in data.tasks" :key="i">
+            <div class="task-pill" :class="{ active: taskIdx === i }" @click="taskIdx = i">
+              <span x-text="shortTask(t.strips.task_id)"></span>
+              <span class="pill-rate" x-text="t.strips.pass_strips.length + 'P/' + t.strips.fail_strips.length + 'F'"></span>
+            </div>
+          </template>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title" x-text="currentTask.strips.task_id"></div>
+            <div class="card-meta" x-text="(currentTask.strips.pass_strips.length + currentTask.strips.fail_strips.length) + ' runs'"></div>
+          </div>
+          <div class="card-body">
+            <!-- Pass strips -->
+            <div class="strip-section" style="color:var(--green)">
+              <span class="strip-dot" style="background:var(--green)"></span>
+              PASS (<span x-text="currentTask.strips.pass_strips.length"></span> runs)
+            </div>
+            <template x-for="strip in currentTask.strips.pass_strips" :key="strip.run_id">
+              <div class="strip-row">
+                <div class="strip-border" style="background:var(--green)"></div>
+                <div class="strip-cells">
+                  <template x-for="(cell, ci) in strip.cells" :key="ci">
+                    <div class="strip-cell"
+                         :style="'background:' + stepColor(cell.type)"
+                         :title="cell.name"
+                         @mouseenter="showTip($event, cell.name + ' (step ' + (ci+1) + ')')"
+                         @mouseleave="hideTip()"></div>
+                  </template>
+                </div>
+              </div>
+            </template>
+
+            <div class="strip-sep"></div>
+
+            <!-- Fail strips -->
+            <div class="strip-section" style="color:var(--red)">
+              <span class="strip-dot" style="background:var(--red)"></span>
+              FAIL (<span x-text="currentTask.strips.fail_strips.length"></span> runs)
+            </div>
+            <template x-for="strip in currentTask.strips.fail_strips" :key="strip.run_id">
+              <div class="strip-row">
+                <div class="strip-border" style="background:var(--red)"></div>
+                <div class="strip-cells">
+                  <template x-for="(cell, ci) in strip.cells" :key="ci">
+                    <div class="strip-cell"
+                         :style="'background:' + stepColor(cell.type)"
+                         :title="cell.name"
+                         @mouseenter="showTip($event, cell.name + ' (step ' + (ci+1) + ')')"
+                         @mouseleave="hideTip()"></div>
+                  </template>
+                </div>
+              </div>
+            </template>
+
+            <!-- Legend -->
+            <div class="strip-legend">
+              <template x-for="[name, color] in stepLegend" :key="name">
+                <div class="strip-legend-item">
+                  <div class="strip-legend-color" :style="'background:' + color"></div>
+                  <span x-text="name"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+</div>
+
+<!-- Tooltip -->
+<div class="tooltip" id="tip"></div>
+
+<script>
+const STEP_COLORS = {
+  search: '#4a7dbd', read: '#5ba8c8', edit: '#d4a24a', test: '#2dd4a0',
+  bash: '#9570d4', submit: '#6b737d', write: '#40b89a', reason: '#8a7060',
+  finish: '#6b737d', glob: '#4a7dbd', grep: '#4a7dbd',
+};
+
+function reportApp() {
+  return {
+    data: "__REPORT_DATA__",
+    tab: 'funnel',
+    taskIdx: 0,
+
+    get currentTask() { return this.data.tasks[this.taskIdx] || this.data.tasks[0]; },
+
+    get bestNode() {
+      const nodes = this.currentTask?.funnel?.nodes?.slice(1) || [];
+      return nodes.reduce((a, b) => (a.pass_rate > b.pass_rate ? a : b), nodes[0]);
+    },
+    get worstNode() {
+      const nodes = this.currentTask?.funnel?.nodes?.slice(1) || [];
+      return nodes.reduce((a, b) => (a.pass_rate < b.pass_rate ? a : b), nodes[0]);
+    },
+
+    get successEdges() {
+      return (this.data.transitions.edges || []).filter(e => e.color === 'green').slice(0, 8);
+    },
+    get failureEdges() {
+      return (this.data.transitions.edges || []).filter(e => e.color === 'red').slice(0, 8);
+    },
+
+    get stepLegend() { return Object.entries(STEP_COLORS).filter(([k]) => !['glob','grep'].includes(k)); },
+
+    pct(v) { return v != null ? Math.round(v * 100) + '%' : '—'; },
+    shortTask(tid) {
+      if (!tid) return '';
+      const parts = tid.split('__');
+      return parts.length > 1 ? parts[1].substring(0, 24) : tid.substring(0, 24);
+    },
+    fnClass(node) {
+      const c = node.color || 'dim';
+      return 'fn-' + c;
+    },
+    stepColor(type) { return STEP_COLORS[type] || '#3a3f45'; },
+
+    showTip(e, text) {
+      const tip = document.getElementById('tip');
+      tip.textContent = text;
+      tip.style.display = 'block';
+      tip.style.left = (e.clientX + 10) + 'px';
+      tip.style.top = (e.clientY - 20) + 'px';
+    },
+    hideTip() { document.getElementById('tip').style.display = 'none'; },
+  };
+}
+</script>
+</body>
+</html>

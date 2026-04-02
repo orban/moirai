@@ -136,15 +136,21 @@ def clusters(
     harness: str | None = typer.Option(None, help="Filter by harness"),
     task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
     html: Path | None = typer.Option(None, help="Write HTML output to path"),
+    concordance: bool = typer.Option(False, help="Compute structural concordance per cluster"),
 ) -> None:
     """Cluster runs by trajectory structure."""
     runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
 
-    from moirai.analyze.cluster import cluster_runs
+    from moirai.analyze.cluster import cluster_runs, compute_concordance
     from moirai.viz.terminal import print_clusters
 
     result = cluster_runs(runs, level=level, threshold=threshold)
-    print_clusters(result, runs)
+
+    concordance_scores = None
+    if concordance:
+        concordance_scores = compute_concordance(runs, result.labels, level="name")
+
+    print_clusters(result, runs, concordance=concordance_scores)
 
     if html:
         from moirai.viz.html import write_clusters_html
@@ -161,13 +167,15 @@ def branch(
     task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
     html: Path | None = typer.Option(None, help="Write HTML output to path"),
     analyze: bool = typer.Option(False, help="Run LLM analysis on divergence points (requires anthropic SDK)"),
+    viewer: Path | None = typer.Option(None, help="Write interactive heatmap viewer HTML"),
 ) -> None:
     """Per-task divergence analysis. Groups by task_id, aligns repeated runs, finds where they split."""
     runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
 
     from collections import defaultdict
-    from moirai.analyze.align import align_runs
+    from moirai.analyze.align import _consensus, align_runs
     from moirai.analyze.divergence import find_divergence_points
+    from moirai.analyze.stats import kendall_tau_b
 
     # Group by task_id — alignment only makes sense for repeated runs of the same task
     tasks: dict[str, list] = defaultdict(list)
@@ -197,7 +205,19 @@ def branch(
 
         task_results.append((tid, task_runs, alignment, points))
 
-        console.print(f"[bold]{tid}[/bold]: {len(task_runs)} runs ({n_pass}P/{n_fail}F), aligned to {n_cols} columns")
+        # Compute concordance from existing alignment (no extra cost)
+        tau_str = ""
+        known = [r for r in task_runs if r.result.success is not None]
+        has_mixed = any(r.result.success for r in known) and any(not r.result.success for r in known)
+        if len(known) >= 5 and has_mixed and alignment.matrix and n_cols > 0:
+            consensus = _consensus(alignment.matrix)
+            distances = [sum(1 for a, b in zip(row, consensus) if a != b) / n_cols for row in alignment.matrix]
+            if len(set(distances)) >= 2:
+                outcomes = [1.0 if r.result.success else 0.0 for r in task_runs]
+                tau, _ = kendall_tau_b([-d for d in distances], outcomes)
+                tau_str = f", concordance: τ={tau:.2f}"
+
+        console.print(f"[bold]{tid}[/bold]: {len(task_runs)} runs ({n_pass}P/{n_fail}F), aligned to {n_cols} columns{tau_str}")
 
         if not points:
             console.print("  [dim]No significant divergence points[/dim]\n")
@@ -224,6 +244,11 @@ def branch(
         from moirai.viz.html import write_branch_html
         out = write_branch_html(None, [], runs, html, task_results=task_results, analyze=analyze)
         console.print(f"\nHTML written to {out}")
+
+    if viewer:
+        from moirai.viz.html import write_stream_html
+        out = write_stream_html(runs, task_results, viewer)
+        console.print(f"\nViewer written to {out}")
 
 
 @app.command()
@@ -558,6 +583,24 @@ def divergence(
         console.print(output)
         if len(targets) > 1:
             console.print("\n" + "=" * 80 + "\n")
+
+
+@app.command()
+def report(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    output: Path = typer.Option("report.html", "--output", "-o", help="Output HTML file"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    model: str | None = typer.Option(None, help="Filter by model"),
+    harness: str | None = typer.Option(None, help="Filter by harness"),
+    task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
+) -> None:
+    """Generate diagnosis report with funnel, transitions, and trajectory strips."""
+    runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
+
+    from moirai.viz.report import write_report
+
+    out = write_report(runs, output)
+    console.print(f"Report written to {out}")
 
 
 def _split_cohorts(
