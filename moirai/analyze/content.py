@@ -422,6 +422,22 @@ def run_explain(
     from moirai.compress import compress_phases
 
     groups, skip_reasons = select_task_groups(runs, task_filter=task_filter)
+
+    # Fallback: if no task groups qualify (e.g., 1 run per task), use
+    # cluster-based grouping instead. Cluster runs by structural similarity,
+    # then analyze each cluster with mixed outcomes.
+    if not groups:
+        all_clusters, cluster_skips = _cluster_based_groups(runs, seed)
+        if task_filter:
+            # Apply filter to cluster-based groups (e.g., --task cluster_8)
+            if task_filter in all_clusters:
+                groups = {task_filter: all_clusters[task_filter]}
+                skip_reasons = {}
+            else:
+                skip_reasons = {task_filter: "not found"}
+        else:
+            groups, skip_reasons = all_clusters, cluster_skips
+
     n_skipped = len(skip_reasons)
     n_qualifying = len(groups)
 
@@ -527,3 +543,45 @@ def _presample(
         sampled.extend(fail_runs[i] for i in sorted(indices))
 
     return sampled
+
+
+def _cluster_based_groups(
+    runs: list[Run],
+    seed: int,
+    min_runs: int = 5,
+) -> tuple[dict[str, list[Run]], dict[str, str]]:
+    """Fall back to cluster-based grouping when task-based grouping fails.
+
+    Clusters runs by structural similarity, then treats each cluster
+    with mixed outcomes as a group for content analysis.
+    """
+    from moirai.analyze.cluster import cluster_runs
+
+    cr = cluster_runs(runs)
+
+    groups: dict[str, list[Run]] = {}
+    skip_reasons: dict[str, str] = {}
+
+    for info in cr.clusters:
+        cluster_runs_list = [
+            r for r in runs if cr.labels.get(r.run_id) == info.cluster_id
+        ]
+        known = [r for r in cluster_runs_list if r.result.success is not None]
+        label = f"cluster_{info.cluster_id}"
+
+        if len(known) < min_runs:
+            skip_reasons[label] = "too few runs"
+            continue
+
+        has_pass = any(r.result.success for r in known)
+        has_fail = any(not r.result.success for r in known)
+        if not has_pass:
+            skip_reasons[label] = "all-fail"
+            continue
+        if not has_fail:
+            skip_reasons[label] = "all-pass"
+            continue
+
+        groups[label] = cluster_runs_list
+
+    return groups, skip_reasons
