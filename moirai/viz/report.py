@@ -34,35 +34,41 @@ def _build_funnel_data(task_id: str, runs: list[Run]) -> dict:
     # Get enriched names for all runs
     run_names = [(r, _enriched_names(r)) for r in runs]
 
-    # Find the key decision point: after initial exploration, what does the agent do?
-    # Look for the transition after the first read/search phase
     def _classify_strategy(names: list[str]) -> str:
-        """Classify a run's strategy at the decision point."""
-        saw_read_source = False
+        """Classify a run's dominant strategy from its enriched step names.
+
+        Three-way split based on what the agent does with edits and tests:
+        - edit_then_test: has at least one edit followed by test (within 2 steps)
+        - edit_no_test: has edits but never tests after editing
+        - explore_heavy: more than 60% of steps are search/read (exploration dominates)
+        """
+        has_edit = False
+        has_test_after_edit = False
+        edit_count = 0
+        explore_count = 0
+
         for i, name in enumerate(names):
-            if name.startswith("read") and "source" in name:
-                saw_read_source = True
-                # What comes next?
-                if i + 1 < len(names):
-                    nxt = names[i + 1]
-                    if nxt.startswith("edit"):
-                        # Check if test follows
-                        if i + 2 < len(names) and names[i + 2].startswith("test"):
-                            return "edit_then_test"
-                        return "edit_no_test"
-                    elif nxt.startswith("search") or nxt.startswith("read"):
-                        return "keep_exploring"
-            elif name.startswith("edit") and not saw_read_source:
-                return "edit_without_reading"
+            if name.startswith("search") or name.startswith("read") or name.startswith("glob") or name.startswith("grep"):
+                explore_count += 1
+            if name.startswith("edit") or name.startswith("write"):
+                has_edit = True
+                edit_count += 1
+                # Check if test follows within next 2 steps
+                for j in range(i + 1, min(i + 3, len(names))):
+                    if names[j].startswith("test"):
+                        has_test_after_edit = True
+                        break
 
-        # Fallback: check for edit→test anywhere
-        for i in range(len(names) - 1):
-            if names[i].startswith("edit") and names[i + 1].startswith("test"):
-                return "edit_then_test"
-            if names[i].startswith("edit"):
-                return "edit_no_test"
+        if not has_edit:
+            return "explore_heavy"
 
-        return "other"
+        # If exploration is >60% of trajectory, classify as explore-heavy
+        if len(names) > 4 and explore_count / len(names) > 0.6:
+            return "explore_heavy"
+
+        if has_test_after_edit:
+            return "edit_then_test"
+        return "edit_no_test"
 
     # Classify all runs
     strategies: dict[str, list[Run]] = defaultdict(list)
@@ -70,7 +76,13 @@ def _build_funnel_data(task_id: str, runs: list[Run]) -> dict:
         strat = _classify_strategy(names)
         strategies[strat].append(r)
 
-    # Build funnel nodes
+    strategy_meta = {
+        "edit_then_test": {"label": "edit \u2192 test", "annotation": "commit & verify", "color": "green"},
+        "edit_no_test": {"label": "edit \u2192 submit", "annotation": "commit & hope", "color": "amber"},
+        "explore_heavy": {"label": "search more", "annotation": "analysis paralysis", "color": "red"},
+    }
+
+    # Build funnel nodes — start node + branches sorted by pass rate desc
     nodes = []
     nodes.append({
         "id": "start",
@@ -78,33 +90,22 @@ def _build_funnel_data(task_id: str, runs: list[Run]) -> dict:
         "count": len(runs),
         "pass_rate": _pass_rate(runs),
         "level": 0,
+        "color": "cyan",
+        "annotation": "",
     })
 
-    strategy_labels = {
-        "edit_then_test": "edit → test",
-        "edit_no_test": "edit → submit",
-        "keep_exploring": "search more",
-        "edit_without_reading": "edit blind",
-        "other": "other",
-    }
-
-    strategy_colors = {
-        "edit_then_test": "green",
-        "edit_no_test": "amber",
-        "keep_exploring": "red",
-        "edit_without_reading": "red",
-        "other": "dim",
-    }
-
-    for strat, strat_runs in sorted(strategies.items(), key=lambda x: -_pass_rate(x[1])):
+    for strat in ["edit_then_test", "edit_no_test", "explore_heavy"]:
+        strat_runs = strategies.get(strat, [])
         if not strat_runs:
             continue
+        meta = strategy_meta[strat]
         nodes.append({
             "id": strat,
-            "label": strategy_labels.get(strat, strat),
+            "label": meta["label"],
             "count": len(strat_runs),
             "pass_rate": _pass_rate(strat_runs),
-            "color": strategy_colors.get(strat, "dim"),
+            "color": meta["color"],
+            "annotation": meta["annotation"],
             "level": 1,
         })
 
