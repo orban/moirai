@@ -299,9 +299,9 @@ function reportApp() {
       const groups = [[], [], []];
       allNodes.forEach(n => groups[nodeGroup(n)].push(n));
 
-      const W = 820, H = 400;
-      const colX = [140, 410, 680]; // x centers for 3 columns
-      const nodeW = 100, nodeH = 36;
+      const W = 820, H = 440;
+      const colX = [130, 410, 690]; // x centers for 3 columns
+      const nodeW = 110, nodeH = 40;
       const positions = {};
 
       groups.forEach((grp, gi) => {
@@ -320,34 +320,57 @@ function reportApp() {
       svg += '<text x="'+colX[1]+'" y="20" font-family="\'Instrument Serif\', serif" font-size="12" fill="'+COLORS.amber+'" text-anchor="middle" font-style="italic">modify</text>';
       svg += '<text x="'+colX[2]+'" y="20" font-family="\'Instrument Serif\', serif" font-size="12" fill="'+COLORS.green+'" text-anchor="middle" font-style="italic">verify / submit</text>';
 
-      // Draw edges (curved arrows with color + thickness)
-      edges.forEach(e => {
+      // Sort edges: neutral first (background), then colored (foreground)
+      const sortedEdges = [...edges].sort((a,b) => {
+        const order = {neutral: 0, green: 1, red: 1};
+        return (order[a.color]||0) - (order[b.color]||0);
+      });
+
+      // Find the single top success and top failure edge for extra emphasis
+      const topSuccess = edges.filter(e=>e.color==='green').sort((a,b)=>b.lift-a.lift)[0];
+      const topFailure = edges.filter(e=>e.color==='red').sort((a,b)=>a.lift-b.lift)[0];
+
+      // Draw edges — dim background layer, then highlighted foreground
+      sortedEdges.forEach(e => {
         const sp = positions[e.source], tp = positions[e.target];
         if (!sp || !tp) return;
 
+        const isTop = (topSuccess && e.source===topSuccess.source && e.target===topSuccess.target) ||
+                      (topFailure && e.source===topFailure.source && e.target===topFailure.target);
+        const isColored = e.color === 'green' || e.color === 'red';
         const c = e.color === 'green' ? COLORS.green : (e.color === 'red' ? COLORS.red : '#6b737d');
-        const opacity = e.color === 'neutral' ? 0.3 : 0.6;
-        const thickness = Math.max(1.5, Math.min(4, e.count / 10));
 
-        // Curved path
+        const opacity = isTop ? 0.9 : (isColored ? 0.5 : 0.15);
+        const thickness = isTop ? 4 : (isColored ? 2.5 : 1.5);
+
+        // Curved path — offset by edge index to reduce overlap
         const dx = tp.cx - sp.cx, dy = tp.cy - sp.cy;
         const mx = (sp.cx + tp.cx) / 2, my = (sp.cy + tp.cy) / 2;
-        // Bend: if same column, curve out; otherwise gentle curve
-        let ctrl;
+        let bendX = mx, bendY = my - 30;
         if (Math.abs(dx) < 20) {
-          ctrl = (mx + 60) + ',' + my; // bend right for self-column
-        } else {
-          ctrl = mx + ',' + (my - 30); // gentle upward curve
+          bendX = mx + 60; bendY = my; // same-column: bend right
         }
+        // Slight vertical jitter to separate overlapping edges
+        const jitter = (e.pass_rate * 40) - 20;
+        bendY += jitter;
 
-        svg += '<path d="M'+sp.cx+','+sp.cy+' Q'+ctrl+' '+tp.cx+','+tp.cy+'" fill="none" stroke="'+c+'" stroke-width="'+thickness+'" opacity="'+opacity+'" stroke-linecap="round"/>';
+        const path = 'M'+sp.cx+','+sp.cy+' Q'+bendX+','+bendY+' '+tp.cx+','+tp.cy;
 
-        // Rate badge on the edge midpoint
-        const badgeX = parseFloat(ctrl.split(',')[0]);
-        const badgeY = parseFloat(ctrl.split(',')[1]);
-        const rate = Math.round(e.pass_rate * 100);
-        svg += '<rect x="'+(badgeX-18)+'" y="'+(badgeY-9)+'" width="36" height="18" rx="9" fill="'+c+'" opacity="0.15" stroke="'+c+'" stroke-width="0.8"/>';
-        svg += '<text x="'+badgeX+'" y="'+badgeY+'" font-family="\'DM Mono\', monospace" font-size="9" font-weight="500" fill="'+c+'" text-anchor="middle" dominant-baseline="central">'+rate+'%</text>';
+        // Glow for top edges
+        if (isTop) {
+          svg += '<path d="'+path+'" fill="none" stroke="'+c+'" stroke-width="'+(thickness+4)+'" opacity="0.1" stroke-linecap="round"/>';
+        }
+        svg += '<path d="'+path+'" fill="none" stroke="'+c+'" stroke-width="'+thickness+'" opacity="'+opacity+'" stroke-linecap="round"/>';
+
+        // Rate badge — only for colored edges
+        if (isColored) {
+          const rate = Math.round(e.pass_rate * 100);
+          const bx = bendX, by = bendY;
+          const badgeW = isTop ? 40 : 34;
+          const fontSize = isTop ? 10 : 9;
+          svg += '<rect x="'+(bx-badgeW/2)+'" y="'+(by-9)+'" width="'+badgeW+'" height="18" rx="9" fill="'+c+'" opacity="'+(isTop?0.25:0.12)+'" stroke="'+c+'" stroke-width="'+(isTop?1.2:0.6)+'"/>';
+          svg += '<text x="'+bx+'" y="'+by+'" font-family="\'DM Mono\', monospace" font-size="'+fontSize+'" font-weight="500" fill="'+c+'" text-anchor="middle" dominant-baseline="central">'+rate+'%</text>';
+        }
       });
 
       // Draw nodes (rounded rects)
