@@ -207,7 +207,7 @@ Each task group is diagnosed independently. If the LLM fails for one group (time
 
 ### Integration with existing commands
 
-`moirai explain` is a new top-level command. It internally calls `align_runs()` and divergence detection but doesn't depend on `cluster_runs()` unless `--cluster` is passed. No changes to existing commands.
+`moirai explain` replaces the existing `explain` command. The old single-run behavior is preserved via `--run <id>`, which explains one run within its cluster context (existing logic, moved from inline CLI code into `analyze/content.py`). Without `--run`, the command runs cross-run differential analysis (the new behavior).
 
 ## Module structure
 
