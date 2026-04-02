@@ -40,13 +40,15 @@ This spec formalizes the four validated layers, documents what we tried and disc
 **What it measures:** Structural features of the agent's reasoning text, extracted via regex. No LLM needed.
 
 Three metrics:
-- **Uncertainty density:** Hedging words ("maybe", "let me try", "attempt", "might", "perhaps", "not sure") per reasoning step. Higher in failing runs across 3 of 4 frameworks (10-13pp pass rate gap, Cohen's d = -0.34 to -0.73).
+- **Uncertainty density:** Hedging words per reasoning step. Uses Hyland's epistemic hedge taxonomy: epistemic verbs ("might", "could"), probability adverbs ("maybe", "perhaps", "possibly"), shields ("not sure", "let me try", "attempt"). Higher in failing runs across 3 of 4 frameworks (10-13pp pass rate gap, Cohen's d = -0.34 to -0.73).
 - **Diagnosis density:** Explicit diagnosis phrases ("the issue is", "the problem is", "root cause", "fails because") per reasoning step. Weak signal, inconsistent direction.
 - **Code reference density:** Mentions of specific code elements (`.py`, `line N`, `def name`, `class name`) per reasoning step. Task-specific signal.
 
 **What it predicts:** Uncertainty density is the strongest cross-framework predictor found. Agents that hedge more in their reasoning fail more. The dose-response is monotonic: 0-0.1 uncertainty → 47% pass, 0.5-1.0 → 24% pass (pooled across 1,631 runs with reasoning).
 
-**What it's good for:** Flagging runs/clusters where the agent is guessing rather than diagnosing. Suggesting reasoning-level interventions ("state your hypothesis before acting").
+**Known confound:** Task difficulty correlates with both hedging and failure. The pooled effect sizes are likely inflated. Within-task comparisons (same task, different runs) are needed to isolate the uncertainty signal from the difficulty signal. When `run_explain` operates on task groups (multiple runs per task), the pass/fail reasoning comparison is already within-task. For cluster-based groups (mixed tasks), the uncertainty delta should be interpreted cautiously.
+
+**What it's good for:** Flagging runs/clusters where the agent is guessing rather than diagnosing. Suggesting reasoning-level interventions ("state your hypothesis before acting"). More trustworthy on task-grouped data than on cluster-grouped data.
 
 **Status:** Implemented in `compute_reasoning_metrics()`. Displayed in `print_explanation()`. Regex patterns need tests.
 
@@ -78,25 +80,36 @@ Three metrics:
 ```python
 def compute_transition_bigrams(
     runs: list[Run],
-    min_count: int = 10,
 ) -> list[TransitionSignal]:
     """Compute transition bigram signals between passing and failing runs.
 
     Only analyzes runs with at least one edit/write step (controls for
     the trivial confound that runs without edits always fail).
 
-    Returns signals sorted by absolute delta descending.
+    Normalization: per-run first (bigram_count / (n_steps - 1)), then
+    averaged across runs in each group. This avoids length-weighting bias
+    where one long run dominates the group signal.
+
+    Returns top 5 signals sorted by absolute delta descending.
+    Min count threshold: 10 (hardcoded, not a parameter).
     """
 ```
 
 Implementation:
 1. Filter to runs with `result.success is not None` and at least one edit/write step
-2. Split into pass/fail groups
-3. For each run, extract enriched step name sequence using `step_enriched_name()` from compress.py, filtering None values
-4. Compute bigram counts per group
-5. Normalize to per-run rates (count / n_runs_in_group)
-6. Compute delta (pass_rate - fail_rate) and direction
-7. Filter by min_count, sort by absolute delta
+2. Require at least 2 runs per group (pass and fail). Return empty if either group has <2.
+3. Skip runs with <2 steps (no bigrams possible)
+4. For each run, extract enriched step name sequence using `step_enriched_name()` from compress.py, filtering None values
+5. For each run, compute bigram counts normalized by `max(1, len(sequence) - 1)` — this is the per-run transition rate
+6. Average per-run rates within each group (pass/fail)
+7. Compute delta (pass_rate - fail_rate)
+8. Filter by total raw count >= 10, take top 5 by absolute delta
+
+Edge cases:
+- Single-step runs: excluded (0 bigrams)
+- Empty enriched names (all None): excluded
+- Self-loops (X→X): included — they're often the strongest signal (test→test, bash→bash). Document as known characteristic, not a bug.
+- One group empty after filtering: return empty list
 
 ### `TransitionSignal` dataclass in schema.py
 
@@ -106,14 +119,13 @@ class TransitionSignal:
     """A transition bigram that differs between passing and failing runs."""
     from_step: str
     to_step: str
-    pass_rate: float        # avg occurrences per passing run
-    fail_rate: float        # avg occurrences per failing run
-    delta: float            # pass_rate - fail_rate
-    total_count: int
-    direction: str          # "pass_correlated" or "fail_correlated"
+    pass_rate: float        # avg per-run normalized rate in passing runs
+    fail_rate: float        # avg per-run normalized rate in failing runs
+    delta: float            # pass_rate - fail_rate (positive = pass-correlated)
+    total_count: int        # raw count across all runs
 ```
 
-Place after `ReasoningMetrics` in schema.py.
+No `direction` field — derive from `sign(delta)` at display time. Place after `ReasoningMetrics` in schema.py.
 
 ### Changes to ExplanationReport
 
@@ -121,7 +133,7 @@ Add field: `transitions: list[TransitionSignal] = field(default_factory=list)`
 
 ### Changes to run_explain
 
-After computing reasoning metrics, call `compute_transition_bigrams(known)` and attach the top-10 results (by absolute delta) to the report.
+After computing reasoning metrics, call `compute_transition_bigrams(known)` and attach the result to the report.
 
 ### Changes to print_explanation
 
@@ -138,20 +150,18 @@ Red for fail-correlated, green for pass-correlated. Only show if transitions are
 
 ### Tests
 
-**TestReasoningMetrics** (6 tests):
-- test_uncertainty_detection
-- test_causal_detection
-- test_diagnosis_detection
-- test_code_ref_detection
-- test_empty_reasoning_returns_none
-- test_per_step_normalization
+**TestReasoningMetrics** (5 tests):
+- test_uncertainty_detection — "let me try", "maybe", "might" counted
+- test_diagnosis_detection — "the issue is", "root cause" counted
+- test_code_ref_detection — ".py", "line 42", "def foo" counted
+- test_empty_reasoning_returns_none — run with no reasoning → None
+- test_per_step_normalization — densities are per reasoning step
 
-**TestTransitionBigrams** (5 tests):
-- test_basic_bigrams
-- test_controls_for_edit_presence
-- test_minimum_count_filter
-- test_sorted_by_delta
-- test_direction_label
+**TestTransitionBigrams** (4 tests):
+- test_basic_bigrams — 3 pass + 3 fail runs with different transition patterns
+- test_controls_for_edit_presence — runs without edits excluded
+- test_single_step_runs_excluded — runs with <2 steps produce no bigrams
+- test_sorted_by_absolute_delta — results sorted descending
 
 ### Cleanup
 
@@ -164,3 +174,10 @@ Red for fail-correlated, green for pass-correlated. Only show if transitions are
 - No LLM classification layer. Haiku semantic classification didn't survive validation.
 - No universal intervention rules. Interventions are framework-specific and outside moirai's scope.
 - No convergence curves or information flow metrics. These didn't predict outcomes.
+
+## Future layers (not implemented here)
+
+Identified by research but not yet validated:
+
+- **Step-level outcome signals:** Did tests improve after an edit? First-green-test latency, regression-after-edit. Directly mechanistic and potentially more actionable than transition counts. Requires test result parsing.
+- **Temporal dynamics:** Step timing, stall duration, acceleration/deceleration. Reveals thrashing vs focused debugging. Requires timestamp data (available in some converters but not all).
