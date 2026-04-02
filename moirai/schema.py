@@ -251,6 +251,17 @@ class DiagnosisResult:
 
 # --- Content-aware analysis dataclasses ---
 
+@dataclass
+class ReasoningMetrics:
+    """Per-run reasoning quality metrics extracted from agent thinking text."""
+    uncertainty_density: float     # hedging words per reasoning step
+    causal_density: float          # causal connectives per reasoning step
+    diagnosis_density: float       # explicit diagnosis phrases per reasoning step
+    code_ref_density: float        # code references (files, functions, lines) per reasoning step
+    reasoning_per_step: float      # avg reasoning chars per step
+    n_reasoning_steps: int         # steps that have reasoning text
+
+
 KNOWN_FINDING_CATEGORIES = {
     "wrong_file", "missing_test", "error_ignored",
     "wrong_command", "reasoning_gap",
@@ -281,8 +292,11 @@ class ExplanationReport:
     divergent_columns: list[DivergencePoint]         # reuse existing dataclass
     n_qualifying: int                               # task groups that qualified
     n_skipped: int                                  # task groups skipped
-    concordance_tau: float | None = None            # only with --cluster
-    concordance_p: float | None = None              # only with --cluster
+    reasoning: ReasoningMetrics | None = None         # per-group aggregate
+    reasoning_pass: ReasoningMetrics | None = None   # passing runs aggregate
+    reasoning_fail: ReasoningMetrics | None = None   # failing runs aggregate
+    concordance_tau: float | None = None             # only with --cluster
+    concordance_p: float | None = None               # only with --cluster
 
 
 # --- Sequence extraction (analysis primitives, not normalization) ---

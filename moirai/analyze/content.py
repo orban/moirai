@@ -15,6 +15,7 @@ from moirai.schema import (
     DivergencePoint,
     ExplanationReport,
     GAP,
+    ReasoningMetrics,
     Run,
 )
 
@@ -58,6 +59,62 @@ def select_task_groups(
         qualifying[task_id] = task_runs
 
     return qualifying, skip_reasons
+
+
+_UNCERTAINTY_RE = re.compile(
+    r'\bmaybe\b|\bmight\b|\bperhaps\b|\bpossibly\b|\bnot sure\b'
+    r'|\blet me try\b|\battempt\b',
+    re.IGNORECASE,
+)
+_CAUSAL_RE = re.compile(
+    r'\bbecause\b|\bsince\b|\btherefore\b|\bthus\b'
+    r'|\bcaused by\b|\bdue to\b|\bresult of\b',
+    re.IGNORECASE,
+)
+_DIAGNOSIS_RE = re.compile(
+    r'\bthe issue is\b|\bthe problem is\b|\broot cause\b'
+    r'|\bthis happens when\b|\bfails? because\b|\berror.{0,20}because\b',
+    re.IGNORECASE,
+)
+_CODE_REF_RE = re.compile(
+    r'\.py\b|line \d+|def \w+|class \w+|import \w+',
+)
+
+
+def compute_reasoning_metrics(runs: list[Run]) -> ReasoningMetrics | None:
+    """Compute aggregate reasoning quality metrics for a set of runs."""
+    total_uncertainty = 0
+    total_causal = 0
+    total_diagnosis = 0
+    total_code_refs = 0
+    total_chars = 0
+    total_reasoning_steps = 0
+    total_steps = 0
+
+    for r in runs:
+        total_steps += len(r.steps)
+        for s in r.steps:
+            reasoning = str(s.output.get("reasoning", ""))
+            if not reasoning:
+                continue
+            total_reasoning_steps += 1
+            total_chars += len(reasoning)
+            total_uncertainty += len(_UNCERTAINTY_RE.findall(reasoning))
+            total_causal += len(_CAUSAL_RE.findall(reasoning))
+            total_diagnosis += len(_DIAGNOSIS_RE.findall(reasoning))
+            total_code_refs += len(_CODE_REF_RE.findall(reasoning))
+
+    if total_reasoning_steps == 0:
+        return None
+
+    return ReasoningMetrics(
+        uncertainty_density=total_uncertainty / total_reasoning_steps,
+        causal_density=total_causal / total_reasoning_steps,
+        diagnosis_density=total_diagnosis / total_reasoning_steps,
+        code_ref_density=total_code_refs / total_reasoning_steps,
+        reasoning_per_step=total_chars / total_steps,
+        n_reasoning_steps=total_reasoning_steps,
+    )
 
 
 def sample_runs(
@@ -493,6 +550,13 @@ def run_explain(
         known = [r for r in group_runs if r.result.success is not None]
         pass_rate = sum(1 for r in known if r.result.success) / len(known) if known else 0.0
 
+        # Reasoning metrics: overall, pass, fail
+        pass_runs_list = [r for r in known if r.result.success]
+        fail_runs_list = [r for r in known if not r.result.success]
+        reasoning_all = compute_reasoning_metrics(known)
+        reasoning_pass = compute_reasoning_metrics(pass_runs_list) if pass_runs_list else None
+        reasoning_fail = compute_reasoning_metrics(fail_runs_list) if fail_runs_list else None
+
         reports.append(ExplanationReport(
             task_id=task_id,
             n_runs=len(group_runs),
@@ -504,6 +568,9 @@ def run_explain(
             divergent_columns=top_divpoints,
             n_qualifying=n_qualifying,
             n_skipped=n_skipped,
+            reasoning=reasoning_all,
+            reasoning_pass=reasoning_pass,
+            reasoning_fail=reasoning_fail,
             concordance_tau=concordance_tau,
             concordance_p=concordance_p,
         ))

@@ -670,6 +670,28 @@ def print_explanation(report: ExplanationReport) -> None:
     # Consensus (always present)
     console.print(f"\n[dim]Consensus: {report.consensus}[/dim]")
 
+    # Reasoning metrics (if available)
+    if report.reasoning_pass and report.reasoning_fail:
+        rp = report.reasoning_pass
+        rf = report.reasoning_fail
+        console.print(f"\n[bold]Reasoning quality[/bold]")
+
+        # Uncertainty: the key metric
+        u_delta = rp.uncertainty_density - rf.uncertainty_density
+        u_color = "green" if u_delta < 0 else "red"
+        console.print(f"  uncertainty:  pass={rp.uncertainty_density:.2f}/step  fail={rf.uncertainty_density:.2f}/step  [{u_color}]Δ={u_delta:+.2f}[/{u_color}]")
+
+        d_delta = rp.diagnosis_density - rf.diagnosis_density
+        d_color = "green" if d_delta > 0 else "yellow"
+        console.print(f"  diagnosis:    pass={rp.diagnosis_density:.2f}/step  fail={rf.diagnosis_density:.2f}/step  [{d_color}]Δ={d_delta:+.2f}[/{d_color}]")
+
+        c_delta = rp.code_ref_density - rf.code_ref_density
+        console.print(f"  [dim]code refs:   pass={rp.code_ref_density:.2f}/step  fail={rf.code_ref_density:.2f}/step  Δ={c_delta:+.2f}[/dim]")
+
+    elif report.reasoning:
+        r = report.reasoning
+        console.print(f"\n[dim]Reasoning: uncertainty={r.uncertainty_density:.2f}/step, diagnosis={r.diagnosis_density:.2f}/step, {r.n_reasoning_steps} reasoning steps[/dim]")
+
     # Concordance (if --cluster was used)
     if report.concordance_tau is not None:
         p_str = f", p={report.concordance_p:.3f}" if report.concordance_p is not None else ""
