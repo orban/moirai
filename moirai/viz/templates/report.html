@@ -180,36 +180,9 @@ body::before {
     <div class="card">
       <div class="card-head">
         <div class="card-title">Step transitions that predict outcomes</div>
-        <div class="card-meta" x-text="data.transitions.total_runs + ' runs analyzed'"></div>
+        <div class="card-meta" x-text="data.transitions.total_runs + ' runs analyzed · baseline ' + pct(data.transitions.baseline_pass_rate)"></div>
       </div>
-      <div class="card-body">
-        <div class="trans-baseline">
-          Baseline pass rate: <strong x-text="pct(data.transitions.baseline_pass_rate)"></strong>.
-          Above = predicts success. Below = predicts failure.
-        </div>
-        <div class="trans-section" style="color:var(--green)">
-          <span class="strip-dot" style="background:var(--green)"></span> Success-predicting
-        </div>
-        <div class="trans-grid">
-          <template x-for="e in successEdges" :key="e.source+e.target">
-            <div class="trans-edge edge-green">
-              <div class="trans-path"><span x-text="e.source"></span><span class="trans-arrow">&rarr;</span><span x-text="e.target"></span></div>
-              <div><span class="trans-rate" x-text="pct(e.pass_rate)"></span><span class="trans-lift" x-text="e.lift+'x'"></span><div class="trans-count" x-text="e.count+' runs'"></div></div>
-            </div>
-          </template>
-        </div>
-        <div class="trans-section" style="color:var(--red)">
-          <span class="strip-dot" style="background:var(--red)"></span> Failure-predicting
-        </div>
-        <div class="trans-grid">
-          <template x-for="e in failureEdges" :key="e.source+e.target">
-            <div class="trans-edge edge-red">
-              <div class="trans-path"><span x-text="e.source"></span><span class="trans-arrow">&rarr;</span><span x-text="e.target"></span></div>
-              <div><span class="trans-rate" x-text="pct(e.pass_rate)"></span><span class="trans-lift" x-text="e.lift+'x'"></span><div class="trans-count" x-text="e.count+' runs'"></div></div>
-            </div>
-          </template>
-        </div>
-      </div>
+      <div class="card-body" x-html="renderTransitions(data.transitions)"></div>
     </div>
   </div>
 
@@ -301,6 +274,99 @@ function reportApp() {
     stepColor(t) { return STEP_COLORS[t]||'#3a3f45'; },
     showTip(e,text) { const t=document.getElementById('tip'); t.textContent=text; t.style.display='block'; t.style.left=(e.clientX+10)+'px'; t.style.top=(e.clientY-20)+'px'; },
     hideTip() { document.getElementById('tip').style.display='none'; },
+
+    renderTransitions(trans) {
+      const edges = trans.edges || [];
+      if (!edges.length) return '<div style="color:var(--text-dim)">No significant transitions found.</div>';
+
+      // Collect unique nodes and assign positions
+      const nodeSet = new Set();
+      edges.forEach(e => { nodeSet.add(e.source); nodeSet.add(e.target); });
+      const allNodes = Array.from(nodeSet);
+
+      // Layout: arrange nodes in a circle-ish flow
+      // Group by role: explore nodes left, modify nodes center, verify/submit nodes right
+      const explore = ['search', 'read', 'glob', 'grep'];
+      const modify = ['edit', 'write', 'bash'];
+      const verify = ['test', 'submit', 'finish', 'reason'];
+
+      function nodeGroup(n) {
+        if (explore.includes(n)) return 0;
+        if (modify.includes(n)) return 1;
+        return 2;
+      }
+
+      const groups = [[], [], []];
+      allNodes.forEach(n => groups[nodeGroup(n)].push(n));
+
+      const W = 820, H = 400;
+      const colX = [140, 410, 680]; // x centers for 3 columns
+      const nodeW = 100, nodeH = 36;
+      const positions = {};
+
+      groups.forEach((grp, gi) => {
+        const cx = colX[gi];
+        const totalH = grp.length * (nodeH + 20);
+        const startY = Math.max(40, (H - totalH) / 2);
+        grp.forEach((n, ni) => {
+          positions[n] = { x: cx - nodeW/2, y: startY + ni * (nodeH + 20), cx: cx, cy: startY + ni * (nodeH + 20) + nodeH/2 };
+        });
+      });
+
+      let svg = '<svg class="funnel-svg" viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg">';
+
+      // Column labels
+      svg += '<text x="'+colX[0]+'" y="20" font-family="\'Instrument Serif\', serif" font-size="12" fill="'+COLORS.cyan+'" text-anchor="middle" font-style="italic">explore</text>';
+      svg += '<text x="'+colX[1]+'" y="20" font-family="\'Instrument Serif\', serif" font-size="12" fill="'+COLORS.amber+'" text-anchor="middle" font-style="italic">modify</text>';
+      svg += '<text x="'+colX[2]+'" y="20" font-family="\'Instrument Serif\', serif" font-size="12" fill="'+COLORS.green+'" text-anchor="middle" font-style="italic">verify / submit</text>';
+
+      // Draw edges (curved arrows with color + thickness)
+      edges.forEach(e => {
+        const sp = positions[e.source], tp = positions[e.target];
+        if (!sp || !tp) return;
+
+        const c = e.color === 'green' ? COLORS.green : (e.color === 'red' ? COLORS.red : '#6b737d');
+        const opacity = e.color === 'neutral' ? 0.3 : 0.6;
+        const thickness = Math.max(1.5, Math.min(4, e.count / 10));
+
+        // Curved path
+        const dx = tp.cx - sp.cx, dy = tp.cy - sp.cy;
+        const mx = (sp.cx + tp.cx) / 2, my = (sp.cy + tp.cy) / 2;
+        // Bend: if same column, curve out; otherwise gentle curve
+        let ctrl;
+        if (Math.abs(dx) < 20) {
+          ctrl = (mx + 60) + ',' + my; // bend right for self-column
+        } else {
+          ctrl = mx + ',' + (my - 30); // gentle upward curve
+        }
+
+        svg += '<path d="M'+sp.cx+','+sp.cy+' Q'+ctrl+' '+tp.cx+','+tp.cy+'" fill="none" stroke="'+c+'" stroke-width="'+thickness+'" opacity="'+opacity+'" stroke-linecap="round"/>';
+
+        // Rate badge on the edge midpoint
+        const badgeX = parseFloat(ctrl.split(',')[0]);
+        const badgeY = parseFloat(ctrl.split(',')[1]);
+        const rate = Math.round(e.pass_rate * 100);
+        svg += '<rect x="'+(badgeX-18)+'" y="'+(badgeY-9)+'" width="36" height="18" rx="9" fill="'+c+'" opacity="0.15" stroke="'+c+'" stroke-width="0.8"/>';
+        svg += '<text x="'+badgeX+'" y="'+badgeY+'" font-family="\'DM Mono\', monospace" font-size="9" font-weight="500" fill="'+c+'" text-anchor="middle" dominant-baseline="central">'+rate+'%</text>';
+      });
+
+      // Draw nodes (rounded rects)
+      allNodes.forEach(n => {
+        const p = positions[n];
+        if (!p) return;
+        const g = nodeGroup(n);
+        const c = g === 0 ? COLORS.cyan : (g === 1 ? COLORS.amber : COLORS.green);
+        const cd = g === 0 ? COLORS_DIM.cyan : (g === 1 ? COLORS_DIM.amber : COLORS_DIM.green);
+
+        svg += '<g class="fn-node">';
+        svg += '<rect class="fn-rect" x="'+p.x+'" y="'+p.y+'" width="'+nodeW+'" height="'+nodeH+'" fill="'+cd+'" stroke="'+c+'" stroke-width="1.5"/>';
+        svg += '<text class="fn-label" x="'+p.cx+'" y="'+(p.cy)+'" fill="'+c+'" font-size="12">'+esc(n)+'</text>';
+        svg += '</g>';
+      });
+
+      svg += '</svg>';
+      return svg;
+    },
 
     renderFunnel(funnel) {
       const nodes = funnel.nodes || [];
