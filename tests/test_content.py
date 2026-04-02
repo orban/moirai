@@ -6,7 +6,10 @@ from moirai.analyze.content import (
 )
 
 
-def _make_run(run_id, task_id, names, success, output=None):
+def _make_run(
+    run_id: str, task_id: str, names: list[str], success: bool,
+    output: list[dict] | None = None,
+) -> Run:
     """Make a Run with named steps and optional output dicts."""
     steps = []
     for i, name in enumerate(names):
@@ -104,7 +107,8 @@ class TestSampleRuns:
                 ["read", "edit", "test"],   # f2: 0 mismatches (near)
             ],
         )
-        sampled = sample_runs(runs, alignment, seed=42)
+        cons = ["read", "edit", "test"]  # majority vote
+        sampled = sample_runs(runs, alignment, cons, seed=42)
         sampled_ids = {r.run_id for r in sampled}
         # Should have at least one pass and one fail
         assert any(r.result.success for r in sampled)
@@ -125,8 +129,9 @@ class TestSampleRuns:
             [r.run_id for r in runs],
             [["read", "edit"]] * 5 + [["bash", "error"]] * 5,
         )
-        result1 = sample_runs(runs, alignment, seed=99)
-        result2 = sample_runs(runs, alignment, seed=99)
+        cons = ["read", "edit"]  # majority from pass runs
+        result1 = sample_runs(runs, alignment, cons, seed=99)
+        result2 = sample_runs(runs, alignment, cons, seed=99)
         assert [r.run_id for r in result1] == [r.run_id for r in result2]
 
     def test_single_run_class(self):
@@ -139,7 +144,8 @@ class TestSampleRuns:
             ["p1", "f1"],
             [["read"], ["bash"]],
         )
-        sampled = sample_runs(runs, alignment, seed=42)
+        cons = ["read"]  # majority
+        sampled = sample_runs(runs, alignment, cons, seed=42)
         assert len(sampled) == 2  # one near per class, no far because only 1 run each
 
 
@@ -263,6 +269,7 @@ Done.'''
 
 class TestInvokeLlm:
     def test_structural_returns_none(self):
-        """mode='structural' -> None without subprocess."""
-        result = invoke_llm("some prompt", mode="structural")
-        assert result is None
+        """mode='structural' -> (None, None) without subprocess."""
+        stdout, error = invoke_llm("some prompt", mode="structural")
+        assert stdout is None
+        assert error is None  # not a failure, intentional skip

@@ -5,7 +5,7 @@ from collections import Counter
 from scipy.cluster.hierarchy import fcluster, linkage
 
 from moirai.analyze.align import distance_matrix
-from moirai.schema import ClusterInfo, ClusterResult, Run, signature
+from moirai.schema import ClusterInfo, ClusterResult, ConcordanceScore, Run, signature
 
 
 def cluster_runs(
@@ -92,7 +92,7 @@ def compute_concordance(
     runs: list[Run],
     cluster_labels: dict[str, int],
     level: str = "name",
-) -> dict:
+) -> dict[int, ConcordanceScore]:
     """Compute structural concordance for each cluster.
 
     Measures whether structural typicality (distance from consensus)

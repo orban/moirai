@@ -15,7 +15,6 @@ from moirai.schema import (
     DivergencePoint,
     ExplanationReport,
     GAP,
-    KNOWN_FINDING_CATEGORIES,
     Run,
 )
 
@@ -64,12 +63,10 @@ def select_task_groups(
 def sample_runs(
     runs: list[Run],
     alignment: Alignment,
+    cons: list[str],
     seed: int = 42,
 ) -> list[Run]:
     """Stratified sampling: near-consensus + high-divergence per outcome class."""
-    from moirai.analyze.align import consensus
-
-    cons = consensus(alignment.matrix)
     n_cols = len(cons) if cons else 0
 
     # Compute per-run distance from consensus
@@ -170,14 +167,16 @@ def build_prompt(
     alignment: Alignment,
     divergent_columns: list[DivergencePoint],
     sampled_runs: list[Run],
+    cons: list[str] | None = None,
 ) -> str:
     """Assemble the analysis prompt with anchor-then-contrast structure."""
     n_runs = len(runs)
     n_pass = sum(1 for r in runs if r.result.success)
     n_fail = sum(1 for r in runs if r.result.success is not None and not r.result.success)
 
-    from moirai.analyze.align import consensus
-    cons = consensus(alignment.matrix)
+    if cons is None:
+        from moirai.analyze.align import consensus
+        cons = consensus(alignment.matrix)
     cons_str = " → ".join(cons[:20]) if cons else "(empty)"
 
     parts: list[str] = []
@@ -243,7 +242,7 @@ def build_prompt(
 
     # Budget check: if over ~8K tokens (~32K chars), reduce to top-3 columns
     if len(prompt) > 32000 and len(divergent_columns) > 3:
-        return build_prompt(task_id, runs, alignment, divergent_columns[:3], sampled_runs)
+        return build_prompt(task_id, runs, alignment, divergent_columns[:3], sampled_runs, cons)
 
     return prompt
 
@@ -325,9 +324,7 @@ def parse_response(raw: str) -> tuple[list[ContentFinding], str, str]:
         if not isinstance(f, dict):
             continue
         category = str(f.get("category", "other"))
-        # Normalize to known categories
-        if category in KNOWN_FINDING_CATEGORIES:
-            pass  # keep as-is
+        # Category is kept as-is from LLM output
         findings.append(ContentFinding(
             category=category,
             column=int(f.get("column", 0)),
@@ -362,38 +359,51 @@ def _try_parse_json(text: str) -> dict | None:
     return None
 
 
-def invoke_llm(prompt: str, mode: str, timeout: int = 60) -> str | None:
-    """Call LLM CLI via subprocess. Returns stdout or None.
+def invoke_llm(
+    prompt: str, mode: str, timeout: int = 60,
+) -> tuple[str | None, str | None]:
+    """Call LLM CLI via subprocess.
 
-    Uses stdin (input=) for prompt to avoid ARG_MAX limits.
+    Returns (stdout, error_reason). stdout is None on failure,
+    error_reason is None on success. Uses stdin for prompt.
     """
     if mode == "structural":
-        return None
+        return None, None  # not a failure, intentional skip
 
     if mode == "auto":
         cli = shutil.which("claude") or shutil.which("codex")
         if not cli:
-            return None
+            return None, None  # auto mode: graceful degradation, not an error
     else:
         cli = shutil.which(mode)
         if not cli:
-            return None
+            return None, f"{mode} CLI not found"
+
+    # Build CLI args per tool
+    cli_name = cli.rsplit("/", 1)[-1] if "/" in cli else cli
+    if cli_name == "claude":
+        cmd = [cli, "-p", "-", "--output-format", "json"]
+    elif cli_name == "codex":
+        cmd = [cli, "--prompt", "-"]
+    else:
+        cmd = [cli, "-p", "-"]
 
     try:
         result = subprocess.run(
-            [cli, "-p", "-", "--output-format", "json"],
+            cmd,
             input=prompt,
             capture_output=True,
             text=True,
             timeout=timeout,
         )
         if result.returncode != 0:
-            return None
-        return result.stdout
+            stderr = result.stderr.strip()[:200] if result.stderr else ""
+            return None, f"{cli_name} exited {result.returncode}: {stderr}"
+        return result.stdout, None
     except subprocess.TimeoutExpired:
-        return None
-    except OSError:
-        return None
+        return None, f"{cli_name} timed out after {timeout}s"
+    except OSError as e:
+        return None, f"{cli_name} failed: {e}"
 
 
 def run_explain(
@@ -407,7 +417,7 @@ def run_explain(
     cluster: bool = False,
 ) -> list[ExplanationReport]:
     """Top-level orchestrator: group -> align -> diverge -> sample -> prompt -> LLM -> parse."""
-    from moirai.analyze.align import align_runs
+    from moirai.analyze.align import align_runs, consensus
     from moirai.analyze.divergence import find_divergence_points
     from moirai.compress import compress_phases
 
@@ -423,6 +433,7 @@ def run_explain(
             group_runs = _presample(group_runs, max_runs, seed)
 
         alignment = align_runs(group_runs, level="name")
+        cons = consensus(alignment.matrix)
         divpoints, _ = find_divergence_points(alignment, group_runs)
 
         # Take top-N by entropy
@@ -434,7 +445,7 @@ def run_explain(
         else:
             consensus_str = "(empty)"
 
-        sampled = sample_runs(group_runs, alignment, seed=seed)
+        sampled = sample_runs(group_runs, alignment, cons, seed=seed)
 
         # Optional clustering
         concordance_tau = None
@@ -449,13 +460,16 @@ def run_explain(
                 concordance_tau = conc[largest_cid].tau
                 concordance_p = conc[largest_cid].p_value
 
-        prompt = build_prompt(task_id, group_runs, alignment, top_divpoints, sampled)
-        raw = invoke_llm(prompt, mode, timeout)
+        prompt = build_prompt(task_id, group_runs, alignment, top_divpoints, sampled, cons)
+        raw, llm_error = invoke_llm(prompt, mode, timeout)
 
         if raw is not None:
             findings, summary, confidence = parse_response(raw)
         else:
             findings, summary, confidence = [], "", ""
+            if llm_error:
+                # Surface error in summary so terminal display shows it
+                summary = f"[LLM error: {llm_error}]"
 
         known = [r for r in group_runs if r.result.success is not None]
         pass_rate = sum(1 for r in known if r.result.success) / len(known) if known else 0.0
