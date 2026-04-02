@@ -34,80 +34,141 @@ def _build_funnel_data(task_id: str, runs: list[Run]) -> dict:
     # Get enriched names for all runs
     run_names = [(r, _enriched_names(r)) for r in runs]
 
-    def _classify_strategy(names: list[str]) -> str:
-        """Classify a run's dominant strategy from its enriched step names.
+    def _classify_two_level(names: list[str]) -> tuple[str, str]:
+        """Classify a run into a two-level tree.
 
-        Three-way split based on what the agent does with edits and tests:
-        - edit_then_test: has at least one edit followed by test (within 2 steps)
-        - edit_no_test: has edits but never tests after editing
-        - explore_heavy: more than 60% of steps are search/read (exploration dominates)
+        Level 1: Does the agent edit promptly or keep exploring?
+          - edit_immediately: first edit appears within first 60% of trajectory
+          - search_more: exploration dominates (>60% search/read, or no edit at all)
+
+        Level 2 (for edit_immediately): Does the agent test after editing?
+          - edit_then_test: has edit followed by test within 2 steps
+          - edit_no_test: edits but never tests afterward
         """
-        has_edit = False
+        explore_steps = {"search", "read", "glob", "grep"}
+        edit_steps = {"edit", "write"}
+
+        first_edit_pos = None
         has_test_after_edit = False
-        edit_count = 0
         explore_count = 0
 
         for i, name in enumerate(names):
-            if name.startswith("search") or name.startswith("read") or name.startswith("glob") or name.startswith("grep"):
+            prefix = name.split("(")[0] if "(" in name else name
+            if prefix in explore_steps:
                 explore_count += 1
-            if name.startswith("edit") or name.startswith("write"):
-                has_edit = True
-                edit_count += 1
-                # Check if test follows within next 2 steps
+            if prefix in edit_steps:
+                if first_edit_pos is None:
+                    first_edit_pos = i
                 for j in range(i + 1, min(i + 3, len(names))):
-                    if names[j].startswith("test"):
+                    jp = names[j].split("(")[0] if "(" in names[j] else names[j]
+                    if jp == "test":
                         has_test_after_edit = True
                         break
 
-        if not has_edit:
-            return "explore_heavy"
+        # Level 1: edit immediately vs search more
+        if first_edit_pos is None:
+            return "search_more", "search_more"
 
-        # If exploration is >60% of trajectory, classify as explore-heavy
-        if len(names) > 4 and explore_count / len(names) > 0.6:
-            return "explore_heavy"
+        explore_ratio = explore_count / len(names) if names else 0
+        edits_late = len(names) > 4 and first_edit_pos / len(names) > 0.7
 
+        if explore_ratio > 0.6 or edits_late:
+            return "search_more", "search_more"
+
+        # Level 2: test after edit vs submit without test
         if has_test_after_edit:
-            return "edit_then_test"
-        return "edit_no_test"
+            return "edit_immediately", "edit_then_test"
+        return "edit_immediately", "edit_no_test"
 
-    # Classify all runs
-    strategies: dict[str, list[Run]] = defaultdict(list)
+    # Classify all runs into the two-level tree
+    level1_groups: dict[str, list[Run]] = defaultdict(list)
+    level2_groups: dict[str, list[Run]] = defaultdict(list)
     for r, names in run_names:
-        strat = _classify_strategy(names)
-        strategies[strat].append(r)
+        l1, l2 = _classify_two_level(names)
+        level1_groups[l1].append(r)
+        level2_groups[l2].append(r)
 
-    strategy_meta = {
-        "edit_then_test": {"label": "edit \u2192 test", "annotation": "commit & verify", "color": "green"},
-        "edit_no_test": {"label": "edit \u2192 submit", "annotation": "commit & hope", "color": "amber"},
-        "explore_heavy": {"label": "search more", "annotation": "analysis paralysis", "color": "red"},
-    }
-
-    # Build funnel nodes — start node + branches sorted by pass rate desc
+    # Build the tree structure for the funnel
+    # Level 0: start
+    # Level 1: edit_immediately vs search_more
+    # Level 2: edit_then_test vs edit_no_test (children of edit_immediately)
+    # Level 2: search_then_edit (child of search_more — they all eventually edit)
     nodes = []
+    edges = []
+
+    # Start node
     nodes.append({
-        "id": "start",
-        "label": "all runs",
-        "count": len(runs),
-        "pass_rate": _pass_rate(runs),
-        "level": 0,
-        "color": "cyan",
-        "annotation": "",
+        "id": "start", "label": "explore \u2192 read(source)",
+        "count": len(runs), "pass_rate": _pass_rate(runs),
+        "sublabel": "all start here",
+        "level": 0, "color": "dim",
     })
 
-    for strat in ["edit_then_test", "edit_no_test", "explore_heavy"]:
-        strat_runs = strategies.get(strat, [])
-        if not strat_runs:
-            continue
-        meta = strategy_meta[strat]
+    # Level 1
+    edit_imm = level1_groups.get("edit_immediately", [])
+    search_more = level1_groups.get("search_more", [])
+
+    if edit_imm:
         nodes.append({
-            "id": strat,
-            "label": meta["label"],
-            "count": len(strat_runs),
-            "pass_rate": _pass_rate(strat_runs),
-            "color": meta["color"],
-            "annotation": meta["annotation"],
-            "level": 1,
+            "id": "edit_immediately", "label": "edit immediately",
+            "count": len(edit_imm), "pass_rate": _pass_rate(edit_imm),
+            "sublabel": f"{len(edit_imm)} runs ({len(edit_imm)*100//len(runs)}%)",
+            "level": 1, "color": "green",
         })
+        edges.append({"from": "start", "to": "edit_immediately"})
+
+    if search_more:
+        nodes.append({
+            "id": "search_more", "label": "search more",
+            "count": len(search_more), "pass_rate": _pass_rate(search_more),
+            "sublabel": f"{len(search_more)} runs ({len(search_more)*100//len(runs)}%)",
+            "level": 1, "color": "red",
+        })
+        edges.append({"from": "start", "to": "search_more"})
+
+    # Level 2 — children of edit_immediately
+    edit_test = level2_groups.get("edit_then_test", [])
+    edit_notest = level2_groups.get("edit_no_test", [])
+
+    if edit_test:
+        n_pass = sum(1 for r in edit_test if r.result.success)
+        nodes.append({
+            "id": "edit_then_test", "label": "edit \u2192 test",
+            "count": len(edit_test), "pass_rate": _pass_rate(edit_test),
+            "sublabel": f"{len(edit_test)} runs",
+            "level": 2, "color": "green",
+            "outcome": True,
+            "outcome_detail": f"{n_pass} of {len(edit_test)} pass",
+            "annotation": "commit & verify",
+        })
+        edges.append({"from": "edit_immediately", "to": "edit_then_test"})
+
+    if edit_notest:
+        n_pass = sum(1 for r in edit_notest if r.result.success)
+        nodes.append({
+            "id": "edit_no_test", "label": "edit \u2192 submit",
+            "count": len(edit_notest), "pass_rate": _pass_rate(edit_notest),
+            "sublabel": f"{len(edit_notest)} runs",
+            "level": 2, "color": "amber",
+            "outcome": True,
+            "outcome_detail": f"{n_pass} of {len(edit_notest)} pass",
+            "annotation": "commit & hope",
+        })
+        edges.append({"from": "edit_immediately", "to": "edit_no_test"})
+
+    # Level 2 — child of search_more (they eventually edit too)
+    if search_more:
+        n_pass = sum(1 for r in search_more if r.result.success)
+        nodes.append({
+            "id": "search_then_edit", "label": "search \u2192 read \u2192 edit",
+            "count": len(search_more), "pass_rate": _pass_rate(search_more),
+            "sublabel": f"{len(search_more)} runs (too late)",
+            "level": 2, "color": "red",
+            "outcome": True,
+            "outcome_detail": f"{n_pass} of {len(search_more)} pass",
+            "annotation": "analysis paralysis",
+        })
+        edges.append({"from": "search_more", "to": "search_then_edit"})
 
     return {
         "task_id": task_id,
@@ -116,6 +177,7 @@ def _build_funnel_data(task_id: str, runs: list[Run]) -> dict:
         "fail_count": len(fails),
         "pass_rate": _pass_rate(runs),
         "nodes": nodes,
+        "edges": edges,
     }
 
 
