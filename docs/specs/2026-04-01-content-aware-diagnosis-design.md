@@ -15,9 +15,9 @@ The structural layer captures *what tools were called*. It misses *what those to
 
 ## What it does
 
-`moirai diagnose <path>` runs a four-stage pipeline that starts with structural alignment (to pair steps across runs) and then uses an LLM to compare the *content* at steps where runs diverge.
+`moirai explain <path>` runs a four-stage pipeline that starts with structural alignment (to pair steps across runs) and then uses an LLM to compare the *content* at steps where runs diverge.
 
-The output is a `DiagnosticReport` per task: a list of findings ("failing runs read the wrong file at step 14", "passing runs ran tests after editing, failing runs didn't") plus a narrative summary.
+The output is a `ExplanationReport` per task: a list of findings ("failing runs read the wrong file at step 14", "passing runs ran tests after editing, failing runs didn't") plus a narrative summary.
 
 ## Pipeline
 
@@ -27,7 +27,7 @@ Partition runs by `task_id`. A task group qualifies if:
 - Mixed outcomes (at least one pass, one fail)
 - At least 5 runs with known outcomes
 
-Groups that don't qualify are skipped silently.
+Groups that don't qualify are skipped with a summary line ("3 task groups skipped: all-pass (2), too few runs (1)").
 
 ### Stage 2: Align
 
@@ -117,19 +117,37 @@ class ContentFinding:
     fail_runs: list[str]       # run_ids with failing behavior
 
 @dataclass
-class StructuralContext:
-    consensus: str             # compressed phase notation
-    concordance_tau: float | None
-    concordance_p: float | None
+class DivergentColumn:
+    column: int                # position in alignment
+    phase: str                 # phase context ("modify", "verify", etc.)
+    values: dict[str, int]     # value distribution
+    outcome_split: dict[str, float]  # value -> pass rate
 
 @dataclass
-class DiagnosticReport:
+class StructuralBaseline:
+    """Always populated — the structural context available without --cluster."""
+    consensus: str                         # compressed phase notation
+    divergent_columns: list[DivergentColumn]
+    n_qualifying: int                      # task groups that qualified
+    n_skipped: int                         # task groups skipped
+
+@dataclass
+class ClusterContext:
+    """Only populated when --cluster is used."""
+    concordance_tau: float | None
+    concordance_p: float | None
+    n_clusters: int
+    cluster_labels: dict[str, int]         # run_id -> cluster_id
+
+@dataclass
+class ExplanationReport:
     task_id: str
     n_runs: int
     pass_rate: float
     findings: list[ContentFinding]
-    summary: str                           # free-form narrative diagnosis
-    structural: StructuralContext | None    # populated when --cluster is used
+    summary: str                           # free-form narrative; empty if --mode structural
+    baseline: StructuralBaseline           # always present
+    cluster: ClusterContext | None          # only with --cluster
 ```
 
 ### Finding categories
@@ -139,34 +157,57 @@ The LLM returns free-text categories. `FindingCategory` provides a known set for
 ## CLI interface
 
 ```
-moirai diagnose <path> [options]
+moirai explain <path> [options]
 
 Options:
   --task TEXT        Restrict to a specific task_id
   --top-n INT       Divergent columns to analyze (default: 5)
-  --llm TEXT        CLI to use: "claude" or "codex" (default: "claude")
+  --mode TEXT        Analysis mode: auto, claude, codex, or structural (default: auto)
   --cluster         Enable clustering + concordance scoring
   --format json     Machine-readable output (default: terminal)
   --max-runs INT    Cap runs per task group for alignment (default: 50)
   --timeout INT     Seconds before LLM subprocess is killed (default: 60)
+  --seed INT        Random seed for sampling reproducibility (default: 42)
 ```
+
+### Modes
+
+| Mode | Behavior |
+|---|---|
+| `auto` (default) | Try `claude` CLI, then `codex`. If neither available, fall back to structural-only output. Exit 0. |
+| `claude` | Use `claude -p`. If missing/timeout/malformed JSON, print structural output and exit 2. |
+| `codex` | Use `codex`. Same failure behavior as `claude`. |
+| `structural` | Skip LLM entirely. Deterministic, CI-safe. Exit 0. |
 
 ### Exit codes
 
-- 0: findings produced, or no qualifying task groups (with informational message)
-- 1: error (malformed input, CLI failure)
-- 2: LLM CLI not available (structural output still printed)
+| Condition | Exit code |
+|---|---|
+| Findings produced | 0 |
+| No qualifying task groups (informational message printed) | 0 |
+| `--mode structural` completed successfully | 0 |
+| `--mode auto` with no LLM CLI found (structural output printed) | 0 |
+| `--mode claude\|codex` with LLM CLI not found (structural output printed) | 2 |
+| LLM subprocess timeout (structural output printed, partial findings if any) | 2 |
+| LLM returned malformed JSON after retry (structural output printed) | 2 |
+| Malformed input, missing path, internal error | 1 |
+
+All exit-2 cases print structural output before exiting. In `auto` mode, LLM unavailability is not a failure — it degrades gracefully and exits 0.
 
 ### Sampling
 
-Two independent caps:
+Two independent caps, both using `--seed` for deterministic tie-breaking:
 
 - `--max-runs`: If a task group exceeds this, sample down (stratified by outcome) before alignment. Controls alignment cost (O(n²) pairwise).
 - Per-column sampling (stage 3): After divergent columns are found, select 2-4 runs per column for the LLM prompt. Uses alignment distances to pick near-consensus and high-divergence representatives. Controls prompt size.
 
+### Multi-group behavior
+
+Each task group is diagnosed independently. If the LLM fails for one group (timeout, malformed JSON), that group's report contains structural output only and a warning. Other groups continue. The command exits 2 if any group had an LLM failure, 0 if all succeeded.
+
 ### Integration with existing commands
 
-`moirai diagnose` is a new top-level command. It internally calls `align_runs()` and divergence detection but doesn't depend on `cluster_runs()` unless `--cluster` is passed. No changes to existing commands.
+`moirai explain` is a new top-level command. It internally calls `align_runs()` and divergence detection but doesn't depend on `cluster_runs()` unless `--cluster` is passed. No changes to existing commands.
 
 ## Module structure
 
@@ -174,8 +215,9 @@ Two independent caps:
 moirai/
   analyze/
     content.py      (NEW)  — content extraction, prompt building, LLM invocation
-  schema.py         (MOD)  — add StepMetadata, ContentFinding, StructuralContext,
-                             DiagnosticReport, FindingCategory
+  schema.py         (MOD)  — add StepMetadata, ContentFinding, DivergentColumn,
+                             StructuralBaseline, ClusterContext, ExplanationReport,
+                             FindingCategory
   cli.py            (MOD)  — add diagnose command
   viz/
     terminal.py     (MOD)  — add print_diagnostic_report()
@@ -187,8 +229,8 @@ moirai/
 - `select_task_groups(runs) -> list[TaskGroup]` — partition by task_id, filter qualifying groups
 - `sample_runs(runs, alignment, n_per_class) -> list[Run]` — stratified near-consensus + high-divergence
 - `build_prompt(task_group, alignment, divergent_columns, sampled_runs) -> str` — assemble prompt
-- `parse_response(raw_json) -> DiagnosticReport` — validate LLM output; strips markdown fences, retries on malformed JSON once, raises on persistent failure
-- `run_diagnosis(runs, options) -> list[DiagnosticReport]` — top-level pipeline orchestrator
+- `parse_response(raw_json) -> ExplanationReport` — validate LLM output; strips markdown fences, retries on malformed JSON once, raises on persistent failure
+- `run_diagnosis(runs, options) -> list[ExplanationReport]` — top-level pipeline orchestrator
 
 ### What stays untouched
 
