@@ -100,6 +100,31 @@ Two patterns unique to this framework:
 
 **Blocking command trap:** OpenHands' sandbox rejects `C-c` interrupts on long-running commands (git clone, network ops), creating an unrecoverable state. The agent spends the remaining budget trying to interrupt a process that won't stop. This is a harness/infrastructure failure, not an LLM reasoning failure.
 
+### OpenHands: over-exploration that doesn't converge
+
+OpenHands fails from the opposite direction as SWE-agent. Where SWE-agent under-explores (10% pass, short traces), OpenHands over-explores without converging (48% pass, avg 65 steps).
+
+Key findings from 500 OpenHands runs:
+- **Re-editing the same file** occurs in 82% of runs (45% pass vs 62% for runs that don't). The `str_replace_editor` encourages iterative edit cycles that often don't converge.
+- **The `plan` action is a 0% success signal** at divergent positions. 133/500 runs use it with no pass rate improvement. Planning mid-trajectory is wasted effort.
+- **Reading tests instead of running them** — failing runs read test files for comprehension (0-33% success) while passing runs execute the suite (65% success).
+- **Step limit hits** — 53 runs (10.6%) hit the 100-step ceiling with only 19% pass rate. The agent gets cut off mid-task.
+- **Error treated as completion signal** — a run gets "File not found," pivots to "let me summarize what I've accomplished," and finishes.
+- **Both clusters show negative concordance** (τ=-0.20, -0.21) — the typical trajectory is a failure mode, same as swe_smith.
+
+Framework comparison:
+
+| Metric | OpenHands | SWE-agent | SWE-smith |
+|---|---|---|---|
+| Pass rate | 48% | 10% | 75% |
+| Avg steps | 65 | 25 | 47 |
+| Read ratio | 26% | 21% | 4% |
+| Search ratio | 16% | 28% | 2% |
+| Test ratio | 11% | 10% | 23% |
+| Re-edit same file | 82% | 1% | — |
+
+OpenHands is read-heavy, SWE-agent is search-heavy, SWE-smith is test-heavy. The highest-passing framework (SWE-smith at 75%) runs 2x more tests than either competitor.
+
 ### eval_harness: agent configs don't matter
 
 Three configurations (flat_llm, intent_layer, none) produce statistically indistinguishable pass rates (16-19%, chi² p>>0.05). 47 of 52 tasks have identical outcomes across all configs.
