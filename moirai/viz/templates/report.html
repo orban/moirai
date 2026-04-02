@@ -284,8 +284,7 @@ function reportApp() {
       edges.forEach(e => { nodeSet.add(e.source); nodeSet.add(e.target); });
       const allNodes = Array.from(nodeSet);
 
-      // Layout: arrange nodes in a circle-ish flow
-      // Group by role: explore nodes left, modify nodes center, verify/submit nodes right
+      // Group by role: explore left, modify center, verify right
       const explore = ['search', 'read', 'glob', 'grep'];
       const modify = ['edit', 'write', 'bash'];
       const verify = ['test', 'submit', 'finish', 'reason'];
@@ -298,27 +297,39 @@ function reportApp() {
 
       const groups = [[], [], []];
       allNodes.forEach(n => groups[nodeGroup(n)].push(n));
+      // Sort nodes within each group for stable ordering
+      const groupOrder = { search:0, read:1, glob:2, grep:3, edit:0, bash:1, write:2, test:0, submit:1, finish:2, reason:3 };
+      groups.forEach(g => g.sort((a,b) => (groupOrder[a]||99) - (groupOrder[b]||99)));
 
-      const W = 820, H = 440;
-      const colX = [130, 410, 690]; // x centers for 3 columns
-      const nodeW = 110, nodeH = 40;
+      const nodeW = 140, nodeH = 50;
+      const vertGap = nodeH + 30; // 80px between node tops
+      const maxGroupLen = Math.max(...groups.map(g => g.length));
+      const H = 50 + maxGroupLen * vertGap + 30; // auto-height
+      const W = 900;
+      const colX = [120, 420, 720];
       const positions = {};
+      const colLabels = ['explore', 'modify', 'verify / submit'];
+      const colLabelY = 28;
+      const topMargin = 50;
 
       groups.forEach((grp, gi) => {
         const cx = colX[gi];
-        const totalH = grp.length * (nodeH + 20);
-        const startY = Math.max(40, (H - totalH) / 2);
+        const totalH = grp.length * vertGap - 30;
+        const startY = topMargin + (maxGroupLen * vertGap - 30 - totalH) / 2;
         grp.forEach((n, ni) => {
-          positions[n] = { x: cx - nodeW/2, y: startY + ni * (nodeH + 20), cx: cx, cy: startY + ni * (nodeH + 20) + nodeH/2 };
+          const y = startY + ni * vertGap;
+          positions[n] = { x: cx - nodeW/2, y, cx, cy: y + nodeH/2 };
         });
       });
 
       let svg = '<svg class="funnel-svg" viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg">';
 
       // Column labels
-      svg += '<text x="'+colX[0]+'" y="20" font-family="\'Instrument Serif\', serif" font-size="12" fill="'+COLORS.cyan+'" text-anchor="middle" font-style="italic">explore</text>';
-      svg += '<text x="'+colX[1]+'" y="20" font-family="\'Instrument Serif\', serif" font-size="12" fill="'+COLORS.amber+'" text-anchor="middle" font-style="italic">modify</text>';
-      svg += '<text x="'+colX[2]+'" y="20" font-family="\'Instrument Serif\', serif" font-size="12" fill="'+COLORS.green+'" text-anchor="middle" font-style="italic">verify / submit</text>';
+      const colColors = [COLORS.cyan, COLORS.amber, COLORS.green];
+      colX.forEach((cx, i) => {
+        if (groups[i].length === 0) return;
+        svg += '<text x="'+cx+'" y="'+colLabelY+'" font-family="\'Instrument Serif\', serif" font-size="13" fill="'+colColors[i]+'" text-anchor="middle" font-style="italic">'+colLabels[i]+'</text>';
+      });
 
       // Sort edges: neutral first (background), then colored (foreground)
       const sortedEdges = [...edges].sort((a,b) => {
@@ -326,12 +337,17 @@ function reportApp() {
         return (order[a.color]||0) - (order[b.color]||0);
       });
 
-      // Find the single top success and top failure edge for extra emphasis
+      // Find top success and top failure edge for emphasis
       const topSuccess = edges.filter(e=>e.color==='green').sort((a,b)=>b.lift-a.lift)[0];
       const topFailure = edges.filter(e=>e.color==='red').sort((a,b)=>a.lift-b.lift)[0];
 
-      // Draw edges — dim background layer, then highlighted foreground
-      sortedEdges.forEach(e => {
+      // --- EDGES FIRST (behind nodes) ---
+      // Collect badge positions to render after edges but before nodes
+      const badges = [];
+
+      // Track edges per source-target pair to offset overlaps
+      const pairCount = {};
+      sortedEdges.forEach((e, ei) => {
         const sp = positions[e.source], tp = positions[e.target];
         if (!sp || !tp) return;
 
@@ -340,40 +356,103 @@ function reportApp() {
         const isColored = e.color === 'green' || e.color === 'red';
         const c = e.color === 'green' ? COLORS.green : (e.color === 'red' ? COLORS.red : '#6b737d');
 
-        const opacity = isTop ? 0.9 : (isColored ? 0.5 : 0.15);
-        const thickness = isTop ? 4 : (isColored ? 2.5 : 1.5);
+        const opacity = isTop ? 0.85 : (isColored ? 0.45 : 0.12);
+        const thickness = isTop ? 3.5 : (isColored ? 2 : 1.2);
 
-        // Curved path — offset by edge index to reduce overlap
-        const dx = tp.cx - sp.cx, dy = tp.cy - sp.cy;
-        const mx = (sp.cx + tp.cx) / 2, my = (sp.cy + tp.cy) / 2;
-        let bendX = mx, bendY = my - 30;
-        if (Math.abs(dx) < 20) {
-          bendX = mx + 60; bendY = my; // same-column: bend right
+        // Determine direction: forward (left→right) or backward (right→left)
+        const forward = sp.cx < tp.cx - 50;
+        const backward = sp.cx > tp.cx + 50;
+        const sameCol = !forward && !backward;
+
+        // Start/end points on node edges
+        let sx, sy, tx, ty;
+        if (forward) {
+          sx = sp.x + nodeW; sy = sp.cy;  // right edge of source
+          tx = tp.x; ty = tp.cy;           // left edge of target
+        } else if (backward) {
+          sx = sp.x; sy = sp.cy;           // left edge of source
+          tx = tp.x + nodeW; ty = tp.cy;   // right edge of target
+        } else {
+          sx = sp.x + nodeW; sy = sp.cy;   // same col: loop right
+          tx = tp.x + nodeW; ty = tp.cy;
         }
-        // Slight vertical jitter to separate overlapping edges
-        const jitter = (e.pass_rate * 40) - 20;
-        bendY += jitter;
 
-        const path = 'M'+sp.cx+','+sp.cy+' Q'+bendX+','+bendY+' '+tp.cx+','+tp.cy;
+        // Unique key for overlap tracking
+        const pairKey = e.source + '>' + e.target;
+        pairCount[pairKey] = (pairCount[pairKey] || 0);
+        const pairIdx = pairCount[pairKey]++;
+
+        // Control points for cubic bezier
+        let c1x, c1y, c2x, c2y;
+        const vertSep = (sy + ty) / 2; // midpoint Y
+
+        if (sameCol) {
+          const loopR = 50 + pairIdx * 14;
+          c1x = sx + loopR; c1y = sy;
+          c2x = tx + loopR; c2y = ty;
+        } else {
+          const dist = Math.abs(tx - sx);
+          const pull = dist * 0.3; // how far control points pull from endpoints
+          const yOff = (pairIdx - 0.5) * 14; // slight vertical offset per duplicate pair
+          if (forward) {
+            c1x = sx + pull; c1y = sy + yOff;
+            c2x = tx - pull; c2y = ty + yOff;
+          } else {
+            c1x = sx - pull; c1y = sy + yOff;
+            c2x = tx + pull; c2y = ty + yOff;
+          }
+        }
+
+        const path = 'M'+sx+','+sy+' C'+c1x+','+c1y+' '+c2x+','+c2y+' '+tx+','+ty;
 
         // Glow for top edges
         if (isTop) {
-          svg += '<path d="'+path+'" fill="none" stroke="'+c+'" stroke-width="'+(thickness+4)+'" opacity="0.1" stroke-linecap="round"/>';
+          svg += '<path d="'+path+'" fill="none" stroke="'+c+'" stroke-width="'+(thickness+5)+'" opacity="0.08" stroke-linecap="round"/>';
+          svg += '<path d="'+path+'" fill="none" stroke="'+c+'" stroke-width="'+(thickness+2)+'" opacity="0.15" stroke-linecap="round"/>';
         }
         svg += '<path d="'+path+'" fill="none" stroke="'+c+'" stroke-width="'+thickness+'" opacity="'+opacity+'" stroke-linecap="round"/>';
 
-        // Rate badge — only for colored edges
+        // Rate badge along the curve, offset from midpoint to avoid node overlap
         if (isColored) {
-          const rate = Math.round(e.pass_rate * 100);
-          const bx = bendX, by = bendY;
-          const badgeW = isTop ? 40 : 34;
-          const fontSize = isTop ? 10 : 9;
-          svg += '<rect x="'+(bx-badgeW/2)+'" y="'+(by-9)+'" width="'+badgeW+'" height="18" rx="9" fill="'+c+'" opacity="'+(isTop?0.25:0.12)+'" stroke="'+c+'" stroke-width="'+(isTop?1.2:0.6)+'"/>';
-          svg += '<text x="'+bx+'" y="'+by+'" font-family="\'DM Mono\', monospace" font-size="'+fontSize+'" font-weight="500" fill="'+c+'" text-anchor="middle" dominant-baseline="central">'+rate+'%</text>';
+          // Place badge at t=0.3 (closer to source) for forward edges, t=0.5 for same-col
+          const t = sameCol ? 0.5 : (forward ? 0.3 : 0.7);
+          const bx = (1-t)*(1-t)*(1-t)*sx + 3*(1-t)*(1-t)*t*c1x + 3*(1-t)*t*t*c2x + t*t*t*tx;
+          const by = (1-t)*(1-t)*(1-t)*sy + 3*(1-t)*(1-t)*t*c1y + 3*(1-t)*t*t*c2y + t*t*t*ty;
+          badges.push({ x: bx, y: by, rate: Math.round(e.pass_rate * 100), color: c, isTop });
         }
       });
 
-      // Draw nodes (rounded rects)
+      // --- BADGES (between edges and nodes) ---
+      // Deconflict overlapping badges: push apart vertically
+      for (let i = 0; i < badges.length; i++) {
+        for (let j = i + 1; j < badges.length; j++) {
+          const dx = Math.abs(badges[i].x - badges[j].x);
+          const dy = Math.abs(badges[i].y - badges[j].y);
+          if (dx < 40 && dy < 22) {
+            // Push apart vertically
+            const pushDir = badges[i].y < badges[j].y ? -1 : 1;
+            badges[i].y += pushDir * 12;
+            badges[j].y -= pushDir * 12;
+          }
+        }
+      }
+
+      badges.forEach(b => {
+        const bw = b.isTop ? 44 : 36;
+        const bh = 20;
+        const fs = b.isTop ? 11 : 9;
+        svg += '<rect x="'+(b.x-bw/2)+'" y="'+(b.y-bh/2)+'" width="'+bw+'" height="'+bh+'" rx="'+bh/2+'" fill="#0f1115" stroke="'+b.color+'" stroke-width="'+(b.isTop?1.2:0.7)+'" opacity="0.95"/>';
+        svg += '<text x="'+b.x+'" y="'+b.y+'" font-family="\'DM Mono\', monospace" font-size="'+fs+'" font-weight="500" fill="'+b.color+'" text-anchor="middle" dominant-baseline="central">'+b.rate+'%</text>';
+      });
+
+      // --- NODES ON TOP ---
+      // Count edges per node to show as sublabel
+      const nodeEdgeCount = {};
+      edges.forEach(e => {
+        nodeEdgeCount[e.source] = (nodeEdgeCount[e.source] || 0) + e.count;
+        nodeEdgeCount[e.target] = (nodeEdgeCount[e.target] || 0) + e.count;
+      });
+
       allNodes.forEach(n => {
         const p = positions[n];
         if (!p) return;
@@ -383,7 +462,7 @@ function reportApp() {
 
         svg += '<g class="fn-node">';
         svg += '<rect class="fn-rect" x="'+p.x+'" y="'+p.y+'" width="'+nodeW+'" height="'+nodeH+'" fill="'+cd+'" stroke="'+c+'" stroke-width="1.5"/>';
-        svg += '<text class="fn-label" x="'+p.cx+'" y="'+(p.cy)+'" fill="'+c+'" font-size="12">'+esc(n)+'</text>';
+        svg += '<text class="fn-label" x="'+p.cx+'" y="'+(p.cy)+'" fill="'+c+'" font-size="14">'+esc(n)+'</text>';
         svg += '</g>';
       });
 
