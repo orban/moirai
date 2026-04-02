@@ -36,6 +36,18 @@ Spec: `docs/specs/2026-04-01-content-aware-diagnosis-design.md`
 
 Schema, content analysis module, CLI command, and terminal display.
 
+### A.0 Expose public consensus() in align.py
+
+Add a one-line public wrapper for `_consensus` in `moirai/analyze/align.py`:
+
+```python
+def consensus(matrix: list[list[str]]) -> list[str]:
+    """Public API for majority-vote consensus from alignment matrix."""
+    return _consensus(matrix)
+```
+
+This avoids importing private `_consensus` from content.py and sample_runs. Existing internal callers (`cluster.py:136`) can migrate to this too.
+
 ### A.1 Add dataclasses to schema.py
 
 Add after the `# --- Evidence and diagnosis dataclasses ---` section:
@@ -69,6 +81,8 @@ class ExplanationReport:
 ```
 
 Known finding categories (for normalization, not enforcement): `wrong_file`, `missing_test`, `error_ignored`, `wrong_command`, `reasoning_gap`. Validated with a set check, not a StrEnum.
+
+**Note on `DivergencePoint` reuse:** `ExplanationReport.divergent_columns` reuses the existing `DivergencePoint` dataclass from schema.py. The `q_value`, `min_branch_size`, and `phase_context` fields are populated by `find_divergence_points()` and are useful context — `phase_context` shows in the terminal, `q_value` indicates statistical significance of the branch. No slim projection needed.
 
 ### A.2 Create moirai/analyze/content.py
 
@@ -114,7 +128,7 @@ def sample_runs(
     seed: int = 42,
 ) -> list[Run]:
     """Stratified sampling: near-consensus + high-divergence per outcome class."""
-    # Compute per-run distance from consensus (reuse _consensus from align.py)
+    # Compute per-run distance from consensus using align.consensus() (public wrapper)
     # For each outcome class (pass/fail):
     #   Pick the run closest to consensus
     #   Pick the run furthest from consensus
@@ -142,8 +156,19 @@ def build_prompt(
       3. Response format: JSON schema with findings[] + summary + confidence
 
     Budget: ~8K tokens. If exceeded, reduce to top-3 columns.
+
+    Column-to-step mapping: alignment.matrix[run_index][col] gives the aligned
+    value (or GAP). To get the original Step object for a run at a column,
+    count non-GAP entries in alignment.matrix[run_index][:col] to get the
+    original step index. This mirrors the pattern in analyze/explain.py:264.
     """
-    # Inline metadata extraction here (no separate function):
+    # Column-to-step mapping (for each sampled run at each divergent column):
+    # - Find run_index from alignment.run_ids
+    # - Count non-GAP entries before column to get original step index
+    # - Access run.steps[orig_idx] for content, run.steps[orig_idx-1] and
+    #   run.steps[orig_idx+1] for before/after context (bounds-checked)
+    #
+    # Inline metadata extraction (no separate function):
     # - Parse step.output.get("result", "") for error strings/tracebacks
     # - Pull file_path from step.attrs.get("file_path") or step.output.get("tool_input")
     # - Pull command from step.attrs.get("command")
@@ -208,7 +233,7 @@ def run_explain(
     cluster: bool = False,
 ) -> list[ExplanationReport]:
     """Top-level orchestrator: group -> align -> diverge -> sample -> prompt -> LLM -> parse."""
-    from moirai.analyze.align import align_runs, _consensus
+    from moirai.analyze.align import align_runs, consensus
     from moirai.analyze.divergence import find_divergence_points
     from moirai.analyze.compress import compress_sequence
 
