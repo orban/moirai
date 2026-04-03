@@ -5,7 +5,7 @@ from collections import Counter
 from scipy.cluster.hierarchy import fcluster, linkage
 
 from moirai.analyze.align import distance_matrix
-from moirai.schema import ClusterInfo, ClusterResult, Run, signature
+from moirai.schema import ClusterInfo, ClusterResult, ConcordanceScore, Run, signature
 
 
 def cluster_runs(
@@ -86,3 +86,83 @@ def cluster_runs(
         ))
 
     return ClusterResult(clusters=clusters, labels=labels)
+
+
+def compute_concordance(
+    runs: list[Run],
+    cluster_labels: dict[str, int],
+    level: str = "name",
+) -> dict[int, ConcordanceScore]:
+    """Compute structural concordance for each cluster.
+
+    Measures whether structural typicality (distance from consensus)
+    predicts outcome quality within each cluster. Uses Kendall's Tau-b.
+
+    Only computed for clusters with mixed outcomes and >= 5 known-outcome runs.
+    """
+    from moirai.analyze.align import consensus, align_runs
+    from moirai.analyze.stats import kendall_tau_b
+    from moirai.schema import ConcordanceScore
+
+    # Group runs by cluster
+    by_cluster: dict[int, list[Run]] = {}
+    for run in runs:
+        cid = cluster_labels.get(run.run_id)
+        if cid is None:
+            continue
+        if cid not in by_cluster:
+            by_cluster[cid] = []
+        by_cluster[cid].append(run)
+
+    results: dict[int, ConcordanceScore] = {}
+
+    for cid, cluster_runs_list in by_cluster.items():
+        # Filter to known outcomes
+        known = [r for r in cluster_runs_list if r.result.success is not None]
+        if len(known) < 5:
+            continue
+
+        # Need mixed outcomes
+        has_success = any(r.result.success for r in known)
+        has_failure = any(not r.result.success for r in known)
+        if not has_success or not has_failure:
+            continue
+
+        # Align within cluster
+        alignment = align_runs(known, level=level)
+        if not alignment.matrix or not alignment.matrix[0]:
+            continue
+
+        cons = consensus(alignment.matrix)
+        n_cols = len(cons)
+
+        # Distance from consensus: count mismatches in alignment matrix
+        distances: list[float] = []
+        for row in alignment.matrix:
+            mismatches = sum(1 for a, b in zip(row, cons) if a != b)
+            distances.append(mismatches / n_cols if n_cols > 0 else 0.0)
+
+        # Need variance in distances
+        if len(set(distances)) < 2:
+            continue
+
+        # Outcome scores
+        if all(r.result.score is not None for r in known):
+            outcomes = [r.result.score for r in known]
+            used_continuous = True
+        else:
+            outcomes = [1.0 if r.result.success else 0.0 for r in known]
+            used_continuous = False
+
+        # Negate distances: closer to consensus = higher = more typical
+        # Positive tau then means "typical runs succeed more"
+        tau, p_value = kendall_tau_b([-d for d in distances], outcomes)
+
+        results[cid] = ConcordanceScore(
+            tau=tau,
+            p_value=p_value,
+            n_runs=len(known),
+            used_continuous=used_continuous,
+        )
+
+    return results

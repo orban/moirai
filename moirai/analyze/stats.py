@@ -239,6 +239,33 @@ def _vectorized_p_values(
     return p_values
 
 
+def kendall_tau_b(x: list[float], y: list[float]) -> tuple[float, float | None]:
+    """Kendall's Tau-b rank correlation.
+
+    Returns (tau, p_value). Returns (0.0, None) for degenerate inputs
+    (n < 5, no variation in x or y, or scipy returns NaN).
+    """
+    if len(x) != len(y) or len(x) < 5:
+        return 0.0, None
+
+    # Check for zero variance
+    if len(set(x)) < 2 or len(set(y)) < 2:
+        return 0.0, None
+
+    from scipy.stats import kendalltau
+
+    result = kendalltau(x, y, variant="b")
+    tau_val = float(result.statistic)
+    p_raw = float(result.pvalue)
+
+    # scipy returns NaN for some degenerate cases
+    if math.isnan(tau_val):
+        return 0.0, None
+
+    p_val = p_raw if not math.isnan(p_raw) else None
+    return tau_val, p_val
+
+
 # --- Effect sizes and confidence intervals ---
 
 

@@ -756,3 +756,337 @@ def _write_empty(path: Path, message: str) -> None:
         f'<h1>moirai</h1><p>{message}</p></body></html>',
         encoding="utf-8",
     )
+
+
+# ---------------------------------------------------------------------------
+# Combined report HTML — summary + patterns + branch in one file
+# ---------------------------------------------------------------------------
+
+def write_report_html(
+    summary: "RunSummary",
+    motifs: list,
+    gapped_motifs: list,
+    n_tested: int,
+    task_divergences: list[tuple[str, list[Run], list]],
+    runs: list[Run],
+    path: Path,
+) -> Path:
+    """Write a single self-contained HTML report combining summary, patterns, and branch analysis.
+
+    Parameters
+    ----------
+    summary : RunSummary
+        Output of summarize_runs.
+    motifs : list[Motif]
+        Contiguous motifs from find_motifs.
+    gapped_motifs : list[GappedMotif]
+        Gapped motifs from find_gapped_motifs.
+    n_tested : int
+        Total number of candidates tested (for context).
+    task_divergences : list of (task_id, task_runs, divergence_points)
+        Per-task branch analysis results.
+    runs : list[Run]
+        All runs (for baseline computation).
+    path : Path
+        Output file path.
+    """
+    import html as html_mod
+    from datetime import datetime
+
+    path = Path(path)
+
+    known = [r for r in runs if r.result.success is not None]
+    baseline = sum(1 for r in known if r.result.success) / len(known) if known else 0.0
+
+    # Merge and sort all motifs by q-value
+    all_motifs = list(motifs) + list(gapped_motifs)
+    all_motifs.sort(key=lambda m: (m.q_value if m.q_value is not None else 1.0, -abs(m.success_rate - m.baseline_rate)))
+
+    success_motifs = [m for m in all_motifs if m.lift > 1.05]
+    failure_motifs = [m for m in all_motifs if m.lift < 0.95]
+
+    # --- Build HTML ---
+    parts: list[str] = []
+    parts.append(_REPORT_HEAD)
+
+    # Header
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    parts.append(f'<div class="container">')
+    parts.append(f'<header><h1>moirai report</h1><span class="timestamp">{ts}</span></header>')
+
+    # Summary section
+    parts.append('<section class="section">')
+    parts.append('<h2>Summary</h2>')
+    parts.append('<div class="stat-grid">')
+    parts.append(_stat_card("Runs", str(summary.run_count)))
+    rate_str = f"{summary.success_rate:.0%}" if summary.success_rate is not None else "N/A"
+    parts.append(_stat_card("Pass rate", rate_str))
+    parts.append(_stat_card("Avg steps", f"{summary.avg_steps:.1f}"))
+    parts.append(_stat_card("Median steps", f"{summary.median_steps:.1f}"))
+    if summary.avg_tokens_in is not None:
+        parts.append(_stat_card("Avg tokens in", f"{summary.avg_tokens_in:,.0f}"))
+    if summary.avg_tokens_out is not None:
+        parts.append(_stat_card("Avg tokens out", f"{summary.avg_tokens_out:,.0f}"))
+    parts.append('</div>')
+
+    # Top signatures
+    if summary.top_signatures:
+        parts.append('<h3>Top signatures</h3>')
+        parts.append('<table><thead><tr><th>Signature</th><th>Count</th></tr></thead><tbody>')
+        for sig, count in summary.top_signatures[:5]:
+            sig_display = html_mod.escape(sig[:100])
+            if len(sig) > 100:
+                sig_display += "..."
+            parts.append(f'<tr><td class="mono">{sig_display}</td><td>{count}</td></tr>')
+        parts.append('</tbody></table>')
+
+    # Error counts
+    if summary.error_counts:
+        parts.append('<h3>Error types</h3>')
+        parts.append('<table><thead><tr><th>Error</th><th>Count</th></tr></thead><tbody>')
+        for err, count in sorted(summary.error_counts.items(), key=lambda x: -x[1]):
+            parts.append(f'<tr><td>{html_mod.escape(err)}</td><td>{count}</td></tr>')
+        parts.append('</tbody></table>')
+
+    parts.append('</section>')
+
+    # Motifs section
+    parts.append('<section class="section">')
+    parts.append(f'<h2>Patterns</h2>')
+    parts.append(f'<p class="dim">Baseline pass rate: {baseline:.0%} &mdash; {n_tested} candidates tested</p>')
+
+    if success_motifs:
+        parts.append('<h3>Success-correlated</h3>')
+        parts.append(_motif_table(success_motifs[:10], "success"))
+
+    if failure_motifs:
+        parts.append('<h3>Failure-correlated</h3>')
+        parts.append(_motif_table(failure_motifs[:10], "failure"))
+
+    if not success_motifs and not failure_motifs:
+        parts.append('<p class="dim">No significant patterns found.</p>')
+
+    parts.append('</section>')
+
+    # Per-task divergence section
+    parts.append('<section class="section">')
+    parts.append(f'<h2>Per-task divergence</h2>')
+    parts.append(f'<p class="dim">{len(task_divergences)} task{"s" if len(task_divergences) != 1 else ""} with mixed outcomes</p>')
+
+    if not task_divergences:
+        parts.append('<p class="dim">No tasks with mixed pass/fail outcomes (need 3+ runs per task).</p>')
+    else:
+        for tid, task_runs, points in task_divergences:
+            n_pass = sum(1 for r in task_runs if r.result.success)
+            n_fail = len(task_runs) - n_pass
+            parts.append(f'<div class="task-card">')
+            parts.append(f'<h3 class="task-title">{html_mod.escape(tid)}</h3>')
+            parts.append(f'<p class="dim">{len(task_runs)} runs ({n_pass}P/{n_fail}F)</p>')
+
+            if not points:
+                parts.append('<p class="dim">No significant divergence points</p>')
+            else:
+                parts.append('<table><thead><tr>'
+                             '<th>Pos</th><th>q-value</th><th>Branch</th>'
+                             '<th>Runs</th><th>Success rate</th><th>Context</th>'
+                             '</tr></thead><tbody>')
+                for point in points[:5]:
+                    q_str = f"{point.q_value:.3f}" if point.q_value is not None else (
+                        f"p={point.p_value:.3f}" if point.p_value is not None else "")
+                    ctx = html_mod.escape(point.phase_context or "") if point.phase_context else ""
+
+                    first_branch = True
+                    for value, count in sorted(point.value_counts.items(), key=lambda x: -x[1]):
+                        rate = point.success_by_value.get(value)
+                        rate_str = f"{rate:.0%}" if rate is not None else "?"
+                        if rate is not None and rate >= 0.6:
+                            rate_class = "rate-good"
+                        elif rate is not None and rate <= 0.2:
+                            rate_class = "rate-bad"
+                        else:
+                            rate_class = "rate-mid"
+
+                        if first_branch:
+                            parts.append(
+                                f'<tr>'
+                                f'<td rowspan="{len(point.value_counts)}">{point.column}</td>'
+                                f'<td rowspan="{len(point.value_counts)}">{q_str}</td>'
+                                f'<td class="mono">{html_mod.escape(value)}</td>'
+                                f'<td>{count}</td>'
+                                f'<td class="{rate_class}">{rate_str}</td>'
+                                f'<td rowspan="{len(point.value_counts)}" class="dim">{ctx}</td>'
+                                f'</tr>')
+                            first_branch = False
+                        else:
+                            parts.append(
+                                f'<tr>'
+                                f'<td class="mono">{html_mod.escape(value)}</td>'
+                                f'<td>{count}</td>'
+                                f'<td class="{rate_class}">{rate_str}</td>'
+                                f'</tr>')
+
+                parts.append('</tbody></table>')
+
+            parts.append('</div>')
+
+    parts.append('</section>')
+    parts.append('</div>')  # container
+    parts.append('</body></html>')
+
+    html_out = "\n".join(parts)
+    path.write_text(html_out, encoding="utf-8")
+    return path
+
+
+def _stat_card(label: str, value: str) -> str:
+    return f'<div class="stat-card"><div class="stat-value">{value}</div><div class="stat-label">{label}</div></div>'
+
+
+def _motif_table(motifs: list, kind: str) -> str:
+    import html as html_mod
+    rows = ['<table><thead><tr><th>Pattern</th><th>Runs</th><th>Rate</th><th>Lift</th><th>q-value</th></tr></thead><tbody>']
+    for m in motifs:
+        display = html_mod.escape(m.display)
+        q_str = f"{m.q_value:.4f}" if m.q_value is not None else ""
+        lift_class = "rate-good" if m.lift > 1.05 else ("rate-bad" if m.lift < 0.95 else "rate-mid")
+        rows.append(
+            f'<tr>'
+            f'<td class="mono">{display}</td>'
+            f'<td>{m.total_runs}</td>'
+            f'<td>{m.success_rate:.0%}</td>'
+            f'<td class="{lift_class}">{m.lift:.2f}x</td>'
+            f'<td>{q_str}</td>'
+            f'</tr>')
+    rows.append('</tbody></table>')
+    return "\n".join(rows)
+
+
+_REPORT_HEAD = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>moirai report</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --text-dim: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --red: #f85149;
+  --yellow: #d29922;
+  --mono: 'IBM Plex Mono', 'Fira Code', 'Consolas', monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 20px;
+}
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 32px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 16px;
+}
+header h1 {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.timestamp { color: var(--text-dim); font-size: 13px; }
+.section {
+  margin-bottom: 36px;
+}
+h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--text);
+}
+h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 16px 0 8px;
+  color: var(--text-dim);
+}
+.dim { color: var(--text-dim); font-size: 13px; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.stat-grid {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 20px;
+  min-width: 120px;
+  text-align: center;
+}
+.stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 16px;
+  font-size: 13px;
+}
+th {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 2px solid var(--border);
+  color: var(--text-dim);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:hover { background: rgba(88, 166, 255, 0.04); }
+.rate-good { color: var(--green); font-weight: 600; }
+.rate-bad { color: var(--red); font-weight: 600; }
+.rate-mid { color: var(--yellow); }
+.task-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+}
+.task-title {
+  font-size: 14px;
+  font-family: var(--mono);
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+</style>
+</head>
+<body>"""

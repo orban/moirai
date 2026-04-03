@@ -138,3 +138,21 @@ class TestExplainCommand:
         result = runner.invoke(app, ["explain", str(tmp_path), "--run", "nonexistent"])
         assert result.exit_code == 1
         assert "not found" in result.output
+
+    def test_explain_structural_mode(self, tmp_path):
+        """Cross-run explain with --mode structural exits 0."""
+        # Need >= 5 runs for the same task_id with mixed outcomes
+        for i in range(4):
+            _write_run(tmp_path, f"pass_{i}.json", f"pass_{i}", success=True)
+        for i in range(3):
+            _write_run(tmp_path, f"fail_{i}.json", f"fail_{i}", success=False)
+        result = runner.invoke(app, ["explain", str(tmp_path), "--mode", "structural"])
+        assert result.exit_code == 0
+
+    def test_explain_no_qualifying_groups(self, tmp_path):
+        """All-pass dataset exits 0 with 'no qualifying' message."""
+        for i in range(6):
+            _write_run(tmp_path, f"pass_{i}.json", f"pass_{i}", success=True)
+        result = runner.invoke(app, ["explain", str(tmp_path), "--mode", "structural"])
+        assert result.exit_code == 0
+        assert "no qualifying" in result.output or "skipped" in result.output

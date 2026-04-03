@@ -160,6 +160,15 @@ class Motif:
 
 
 @dataclass
+class ConcordanceScore:
+    """Structural concordance for a cluster — does typicality predict outcome?"""
+    tau: float                    # Kendall's Tau-b, in [-1, 1]
+    p_value: float | None         # significance; None = degenerate input
+    n_runs: int                   # runs used (after excluding unknown outcomes)
+    used_continuous: bool         # True if result.score was used, False if binary
+
+
+@dataclass
 class GappedMotif:
     """An ordered subsequence pattern with flexible gaps between anchors."""
     anchors: tuple[str, ...]
@@ -238,6 +247,62 @@ class DiagnosisResult:
     task_breakdown: list[TaskBreakdown]
     baseline_pass_rate: float
     current_pass_rate: float
+
+
+# --- Content-aware analysis dataclasses ---
+
+@dataclass
+class ReasoningMetrics:
+    """Per-run reasoning quality metrics extracted from agent thinking text."""
+    uncertainty_density: float     # hedging words per reasoning step
+    causal_density: float          # causal connectives per reasoning step
+    diagnosis_density: float       # explicit diagnosis phrases per reasoning step
+    code_ref_density: float        # code references (files, functions, lines) per reasoning step
+    reasoning_per_step: float      # avg reasoning chars per step
+    n_reasoning_steps: int         # steps that have reasoning text
+
+
+@dataclass
+class TransitionSignal:
+    """A transition bigram that differs between passing and failing runs."""
+    from_step: str
+    to_step: str
+    pass_rate: float        # avg per-run normalized rate in passing runs
+    fail_rate: float        # avg per-run normalized rate in failing runs
+    delta: float            # pass_rate - fail_rate (positive = pass-correlated)
+    total_count: int        # raw count across all runs
+
+
+@dataclass
+class ContentFinding:
+    """A single finding from LLM-assisted content comparison."""
+    category: str              # free-text from LLM; normalized when possible
+    column: int                # alignment column where observed
+    description: str           # one-sentence explanation
+    evidence: str              # specific content from runs
+    pass_runs: list[str] = field(default_factory=list)
+    fail_runs: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ExplanationReport:
+    """Output of content-aware explain for one task group."""
+    task_id: str
+    n_runs: int
+    pass_rate: float
+    findings: list[ContentFinding]
+    summary: str                                    # free-form narrative; empty if structural
+    confidence: str                                 # "high"/"medium"/"low"; empty if structural
+    consensus: str                                  # compressed phase notation
+    divergent_columns: list[DivergencePoint]         # reuse existing dataclass
+    n_qualifying: int                               # task groups that qualified
+    n_skipped: int                                  # task groups skipped
+    reasoning: ReasoningMetrics | None = None         # per-group aggregate
+    reasoning_pass: ReasoningMetrics | None = None   # passing runs aggregate
+    reasoning_fail: ReasoningMetrics | None = None   # failing runs aggregate
+    transitions: list[TransitionSignal] = field(default_factory=list)
+    concordance_tau: float | None = None             # only with --cluster
+    concordance_p: float | None = None               # only with --cluster
 
 
 # --- Sequence extraction (analysis primitives, not normalization) ---
