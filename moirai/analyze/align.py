@@ -110,7 +110,7 @@ def distance_matrix(runs: list[Run], level: str = "type") -> np.ndarray:
     return np.array(dists)
 
 
-def _consensus(aligned_sequences: list[list[str]]) -> list[str]:
+def consensus(aligned_sequences: list[list[str]]) -> list[str]:
     """Build consensus sequence from multiple aligned sequences.
 
     At each column, take the majority non-GAP value. Ties broken by first occurrence.
@@ -197,7 +197,7 @@ def align_runs(runs: list[Run], level: str = "type") -> Alignment:
     remaining.discard(best_j)
 
     # Build initial consensus
-    current_consensus = _consensus([al_a, al_b])
+    current_consensus = consensus([al_a, al_b])
 
     # Progressively add remaining runs
     while remaining:
@@ -243,7 +243,7 @@ def align_runs(runs: list[Run], level: str = "type") -> Alignment:
         remaining.discard(best_idx)
 
         # Update consensus
-        current_consensus = _consensus(list(aligned.values()))
+        current_consensus = consensus(list(aligned.values()))
 
     # Build final matrix in original run order
     run_ids = [r.run_id for r in runs]

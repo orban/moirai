@@ -1,0 +1,43 @@
+[
+  {
+    "id": "reasoning_approach",
+    "type": "prompt",
+    "description": "Agent reasoning strategy (embedded chain-of-thought vs tool-only execution)",
+    "expected_shifts": {
+      "REASONING_DENSITY": "decrease",
+      "BLIND_SUBMIT_RATE": "decrease"
+    },
+    "prior": 0.0
+  },
+  {
+    "id": "verification_strategy",
+    "type": "prompt",
+    "description": "How the agent verifies fixes (test-iterate vs submit-and-hope)",
+    "expected_shifts": {
+      "TEST_AFTER_EDIT_RATE": "decrease",
+      "ITERATIVE_FIX_RATE": "decrease",
+      "BLIND_SUBMIT_RATE": "increase"
+    },
+    "prior": 0.0
+  },
+  {
+    "id": "exploration_depth",
+    "type": "model",
+    "description": "How thoroughly the agent explores before editing",
+    "expected_shifts": {
+      "SEARCH_BEFORE_EDIT_RATE": "increase",
+      "AVG_STEP_COUNT": "increase"
+    },
+    "prior": 0.0
+  },
+  {
+    "id": "tool_environment",
+    "type": "tool",
+    "description": "Execution environment reliability (sandboxing, timeouts, error handling)",
+    "expected_shifts": {
+      "TOOL_TIMEOUT_ERROR_RATE": "increase",
+      "STEP_FAILURE_RATE": "increase"
+    },
+    "prior": 0.0
+  }
+]

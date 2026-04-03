@@ -7,6 +7,7 @@ from moirai.analyze.stats import (
     fishers_exact_2x2,
     fishers_exact_branches,
     chi_squared_test,
+    kendall_tau_b,
     permutation_fdr,
 )
 
@@ -112,6 +113,58 @@ class TestChiSquared:
 
     def test_single_branch(self):
         assert chi_squared_test([(5, 5)]) == 1.0
+
+
+class TestKendallTauB:
+    def test_perfect_agreement(self):
+        from pytest import approx
+        tau, p = kendall_tau_b([1, 2, 3, 4, 5], [1, 2, 3, 4, 5])
+        assert tau == approx(1.0)
+        assert p is not None and p < 0.05
+
+    def test_perfect_disagreement(self):
+        from pytest import approx
+        tau, p = kendall_tau_b([1, 2, 3, 4, 5], [5, 4, 3, 2, 1])
+        assert tau == approx(-1.0)
+        assert p is not None and p < 0.05
+
+    def test_no_correlation(self):
+        tau, p = kendall_tau_b([1, 2, 3, 4, 5], [3, 1, 4, 5, 2])
+        assert -0.5 < tau < 0.5
+
+    def test_with_ties(self):
+        tau, p = kendall_tau_b([1, 1, 2, 2, 3], [1, 2, 1, 2, 3])
+        assert -1.0 <= tau <= 1.0
+        assert p is not None
+
+    def test_too_few_values(self):
+        tau, p = kendall_tau_b([1, 2, 3], [1, 2, 3])
+        assert tau == 0.0
+        assert p is None
+
+    def test_no_variance_x(self):
+        tau, p = kendall_tau_b([1, 1, 1, 1, 1], [1, 2, 3, 4, 5])
+        assert tau == 0.0
+        assert p is None
+
+    def test_no_variance_y(self):
+        tau, p = kendall_tau_b([1, 2, 3, 4, 5], [1, 1, 1, 1, 1])
+        assert tau == 0.0
+        assert p is None
+
+    def test_binary_outcomes(self):
+        """Binary y (pass/fail) — the common case in moirai."""
+        tau, p = kendall_tau_b(
+            [0.1, 0.2, 0.3, 0.8, 0.9],
+            [1.0, 1.0, 1.0, 0.0, 0.0],
+        )
+        assert tau < 0  # higher distance -> failure
+        assert p is not None
+
+    def test_length_mismatch(self):
+        tau, p = kendall_tau_b([1, 2, 3], [1, 2])
+        assert tau == 0.0
+        assert p is None
 
 
 class TestPermutationFDR:

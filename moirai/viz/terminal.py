@@ -13,6 +13,7 @@ from moirai.schema import (
     ClusterResult,
     CohortDiff,
     DivergencePoint,
+    ExplanationReport,
     Run,
     RunSummary,
     ValidationResult,
@@ -212,7 +213,11 @@ def _compress_prototype(proto: str) -> str:
     return _format_rle(_rle(phases))
 
 
-def print_clusters(result: ClusterResult, runs: list[Run] | None = None) -> None:
+def print_clusters(
+    result: ClusterResult,
+    runs: list[Run] | None = None,
+    concordance: dict | None = None,
+) -> None:
     """Print cluster summary with compressed signatures and sub-patterns."""
     if not result.clusters:
         console.print("No clusters found.")
@@ -225,7 +230,22 @@ def print_clusters(result: ClusterResult, runs: list[Run] | None = None) -> None
 
     for info in sorted(result.clusters, key=lambda c: -c.count):
         rate_str = f"{info.success_rate:.0%}" if info.success_rate is not None else "N/A"
-        console.print(f"[bold]Cluster {info.cluster_id}[/bold]: {info.count} runs, {rate_str} success")
+
+        # Concordance suffix
+        conc_str = ""
+        conc_score = concordance.get(info.cluster_id) if concordance else None
+        if conc_score is not None:
+            p_str = f", p={conc_score.p_value:.3f}" if conc_score.p_value is not None else ""
+            conc_str = f", concordance: τ={conc_score.tau:.2f}{p_str}"
+
+        console.print(f"[bold]Cluster {info.cluster_id}[/bold]: {info.count} runs, {rate_str} success{conc_str}")
+
+        # Concordance diagnostic messages
+        if conc_score is not None:
+            if abs(conc_score.tau) < 0.1:
+                console.print("  [yellow]structure alone doesn't explain outcomes — reasoning or content analysis needed[/yellow]")
+            elif conc_score.tau < -0.1:
+                console.print("  [yellow]structurally typical runs fail more — the dominant pattern is a failure mode[/yellow]")
 
         if run_map:
             cluster_runs_list = [run_map[rid] for rid, cid in result.labels.items()
@@ -614,3 +634,74 @@ def print_motifs(motifs: list, baseline: float, n_runs: int, n_tested: int = 0) 
                 f"[dim]{pos_str}, {q_str}[/dim]"
             )
         console.print()
+
+
+def print_explanation(report: ExplanationReport) -> None:
+    """Print content-aware explanation report."""
+    # Header: task_id, run count, pass rate
+    console.print(f"[bold]{report.task_id}[/bold]: {report.n_runs} runs, {report.pass_rate:.0%} pass")
+
+    # Summary (if present -- empty in structural mode)
+    if report.summary:
+        console.print(f"\n[bold]Summary[/bold]")
+        console.print(report.summary)
+
+    # Findings (if any)
+    if report.findings:
+        console.print(f"\n[bold]Findings[/bold] ({len(report.findings)})")
+        for f in report.findings:
+            color = "red" if f.category in ("error_ignored", "wrong_file") else "yellow"
+            console.print(f"  [{color}]{f.category}[/{color}] col {f.column}: {f.description}")
+            console.print(f"    [dim]{f.evidence}[/dim]")
+
+    # Divergent columns (always present -- structural layer)
+    if report.divergent_columns:
+        console.print(f"\n[bold]Divergent positions[/bold]")
+        for dp in report.divergent_columns:
+            vals = ", ".join(f"{v}: {c}" for v, c in dp.value_counts.items())
+            succ = ", ".join(
+                f"{v}: {r:.0%}" for v, r in (dp.success_by_value or {}).items()
+                if r is not None
+            )
+            console.print(f"  col {dp.column}: {vals}")
+            if succ:
+                console.print(f"    [dim]success rates: {succ}[/dim]")
+
+    # Consensus (always present)
+    console.print(f"\n[dim]Consensus: {report.consensus}[/dim]")
+
+    # Reasoning metrics (if available)
+    if report.reasoning_pass and report.reasoning_fail:
+        rp = report.reasoning_pass
+        rf = report.reasoning_fail
+        console.print(f"\n[bold]Reasoning quality[/bold]")
+
+        # Uncertainty: the key metric
+        u_delta = rp.uncertainty_density - rf.uncertainty_density
+        u_color = "green" if u_delta < 0 else "red"
+        console.print(f"  uncertainty:  pass={rp.uncertainty_density:.2f}/step  fail={rf.uncertainty_density:.2f}/step  [{u_color}]Δ={u_delta:+.2f}[/{u_color}]")
+
+        d_delta = rp.diagnosis_density - rf.diagnosis_density
+        d_color = "green" if d_delta > 0 else "yellow"
+        console.print(f"  diagnosis:    pass={rp.diagnosis_density:.2f}/step  fail={rf.diagnosis_density:.2f}/step  [{d_color}]Δ={d_delta:+.2f}[/{d_color}]")
+
+        c_delta = rp.code_ref_density - rf.code_ref_density
+        console.print(f"  [dim]code refs:   pass={rp.code_ref_density:.2f}/step  fail={rf.code_ref_density:.2f}/step  Δ={c_delta:+.2f}[/dim]")
+
+    elif report.reasoning:
+        r = report.reasoning
+        console.print(f"\n[dim]Reasoning: uncertainty={r.uncertainty_density:.2f}/step, diagnosis={r.diagnosis_density:.2f}/step, {r.n_reasoning_steps} reasoning steps[/dim]")
+
+    # Transition signals (if available)
+    if report.transitions:
+        console.print(f"\n[bold]Transition signals[/bold]")
+        for t in report.transitions[:5]:
+            label = f"{t.from_step} → {t.to_step}"
+            color = "green" if t.delta > 0 else "red"
+            direction = "pass" if t.delta > 0 else "fail"
+            console.print(f"  {label:40s} pass: {t.pass_rate:.1f}/run  fail: {t.fail_rate:.1f}/run  [{color}]Δ={t.delta:+.1f} ■ {direction}[/{color}]")
+
+    # Concordance (if --cluster was used)
+    if report.concordance_tau is not None:
+        p_str = f", p={report.concordance_p:.3f}" if report.concordance_p is not None else ""
+        console.print(f"[dim]Concordance: τ={report.concordance_tau:.2f}{p_str}[/dim]")

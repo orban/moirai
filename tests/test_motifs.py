@@ -1,12 +1,12 @@
 """Tests for motif discovery."""
 
 from moirai.schema import Step, Result, Run
-from moirai.analyze.motifs import find_motifs, _filtered_names, _extract_ngrams
+from moirai.analyze.motifs import find_motifs, stratified_find_motifs, _filtered_names, _extract_ngrams
 
 
-def _make_run(run_id: str, names: list[str], success: bool) -> Run:
+def _make_run(run_id: str, names: list[str], success: bool, task_id: str = "t1", task_family: str | None = None) -> Run:
     steps = [Step(idx=i, type="tool", name=n) for i, n in enumerate(names)]
-    return Run(run_id=run_id, task_id="t1", steps=steps, result=Result(success=success))
+    return Run(run_id=run_id, task_id=task_id, task_family=task_family, steps=steps, result=Result(success=success))
 
 
 class TestFilteredNames:
@@ -117,3 +117,93 @@ class TestFindMotifs:
         # Get BH-filtered (default q=0.05)
         filtered, _ = find_motifs(pass_runs + fail_runs, min_n=3, max_n=3, min_count=3, q_threshold=0.05)
         assert len(filtered) <= len(all_motifs)
+
+
+class TestStratifiedFindMotifs:
+    def test_removes_family_confound(self):
+        """Motifs that are just family-identity proxies should vanish under stratification.
+
+        Family A always passes with pattern [read, edit, test].
+        Family B always fails with pattern [write, write, write].
+        Unstratified: the patterns look outcome-predictive.
+        Stratified: each family has uniform outcomes, so no motifs survive.
+        """
+        family_a = [
+            _make_run(f"a{i}", ["read", "edit", "test"], True, task_family="alpha")
+            for i in range(6)
+        ]
+        family_b = [
+            _make_run(f"b{i}", ["write", "write", "write"], False, task_family="beta")
+            for i in range(6)
+        ]
+        all_runs = family_a + family_b
+
+        # Unstratified: should find motifs (cross-family confound)
+        unstratified, _ = find_motifs(all_runs, min_n=3, max_n=3, min_count=3, q_threshold=1.0)
+        assert len(unstratified) > 0
+
+        # Stratified: each family is uniform-outcome, so nothing should survive
+        stratified, _ = stratified_find_motifs(
+            all_runs,
+            stratify_by=lambda r: r.task_family,
+            min_n=3, max_n=3, min_count=3, q_threshold=1.0,
+        )
+        assert len(stratified) == 0
+
+    def test_preserves_genuine_motifs(self):
+        """When families have mixed outcomes internally, real motifs survive."""
+        # Both families have the same pattern structure with mixed outcomes
+        runs = []
+        for fam in ["alpha", "beta"]:
+            for i in range(5):
+                runs.append(_make_run(f"{fam}_p{i}", ["read", "edit", "test_result", "write"], True, task_family=fam))
+            for i in range(5):
+                runs.append(_make_run(f"{fam}_f{i}", ["read", "write", "write", "write"], False, task_family=fam))
+
+        unstratified, _ = find_motifs(runs, min_n=3, max_n=3, min_count=3, q_threshold=0.5)
+        stratified, _ = stratified_find_motifs(
+            runs,
+            stratify_by=lambda r: r.task_family,
+            min_n=3, max_n=3, min_count=3, q_threshold=0.5,
+        )
+        # Both should find motifs since the signal is real within each family
+        assert len(unstratified) > 0
+        assert len(stratified) > 0
+
+    def test_skips_uniform_groups(self):
+        """Groups with no outcome variance are skipped, not errored on."""
+        # Family A: all pass. Family B: mixed.
+        runs = [
+            _make_run(f"a{i}", ["read", "edit", "test"], True, task_family="alpha")
+            for i in range(5)
+        ]
+        for i in range(5):
+            runs.append(_make_run(f"bp{i}", ["read", "edit", "test_result", "write"], True, task_family="beta"))
+        for i in range(5):
+            runs.append(_make_run(f"bf{i}", ["read", "write", "write", "write"], False, task_family="beta"))
+
+        stratified, n_tested = stratified_find_motifs(
+            runs,
+            stratify_by=lambda r: r.task_family,
+            min_n=3, max_n=3, min_count=3, q_threshold=0.5,
+        )
+        # Should run without error; only beta contributes motifs
+        assert n_tested > 0
+
+    def test_deduplicates_across_groups(self):
+        """Same pattern found in multiple groups keeps the best q-value."""
+        runs = []
+        for fam in ["alpha", "beta"]:
+            for i in range(5):
+                runs.append(_make_run(f"{fam}_p{i}", ["read", "edit", "test_result", "write"], True, task_family=fam))
+            for i in range(5):
+                runs.append(_make_run(f"{fam}_f{i}", ["read", "write", "write", "write"], False, task_family=fam))
+
+        stratified, _ = stratified_find_motifs(
+            runs,
+            stratify_by=lambda r: r.task_family,
+            min_n=3, max_n=3, min_count=3, q_threshold=1.0,
+        )
+        # Each pattern should appear at most once
+        patterns = [m.pattern for m in stratified]
+        assert len(patterns) == len(set(patterns))
