@@ -6,6 +6,8 @@ discriminate between successful and failing runs.
 from __future__ import annotations
 
 import math
+from collections import defaultdict
+from typing import Callable
 
 from moirai.analyze.stats import benjamini_hochberg, fishers_exact_2x2
 from moirai.compress import step_enriched_name
@@ -332,3 +334,94 @@ def _is_subsequence(short: tuple[str, ...], long: tuple[str, ...]) -> bool:
     """Check if short is a strict subsequence of long."""
     it = iter(long)
     return all(s in it for s in short)
+
+
+def _has_outcome_variance(runs: list[Run]) -> bool:
+    """True if runs contain both successes and failures."""
+    known = [r for r in runs if r.result.success is not None]
+    if len(known) < 2:
+        return False
+    has_pass = any(r.result.success for r in known)
+    has_fail = any(not r.result.success for r in known)
+    return has_pass and has_fail
+
+
+def stratified_find_motifs(
+    runs: list[Run],
+    stratify_by: Callable[[Run], str | None],
+    min_n: int = 3,
+    max_n: int = 5,
+    min_count: int = 3,
+    q_threshold: float = 0.05,
+) -> tuple[list[Motif], int]:
+    """Find motifs within each stratum independently, then merge.
+
+    Groups runs by stratify_by(run), runs discovery within each group
+    that has mixed outcomes, and returns the de-duplicated union. This
+    prevents cross-group confounds (e.g., task-family composition
+    artifacts) from appearing as significant motifs.
+    """
+    groups: dict[str | None, list[Run]] = defaultdict(list)
+    for run in runs:
+        groups[stratify_by(run)].append(run)
+
+    seen_patterns: dict[tuple[str, ...], Motif] = {}
+    total_tested = 0
+
+    for group_runs in groups.values():
+        if not _has_outcome_variance(group_runs):
+            continue
+        motifs, n_tested = find_motifs(
+            group_runs,
+            min_n=min_n,
+            max_n=max_n,
+            min_count=min_count,
+            q_threshold=q_threshold,
+        )
+        total_tested += n_tested
+        for m in motifs:
+            existing = seen_patterns.get(m.pattern)
+            if existing is None or (m.q_value or 1.0) < (existing.q_value or 1.0):
+                seen_patterns[m.pattern] = m
+
+    merged = list(seen_patterns.values())
+    merged.sort(key=lambda m: (m.q_value if m.q_value is not None else 1.0, -abs(m.success_rate - m.baseline_rate)))
+    return merged, total_tested
+
+
+def stratified_find_gapped_motifs(
+    runs: list[Run],
+    stratify_by: Callable[[Run], str | None],
+    max_length: int = 3,
+    min_count: int = 3,
+    q_threshold: float = 0.05,
+) -> tuple[list[GappedMotif], int]:
+    """Find gapped motifs within each stratum independently, then merge.
+
+    Same logic as stratified_find_motifs but for gapped patterns.
+    """
+    groups: dict[str | None, list[Run]] = defaultdict(list)
+    for run in runs:
+        groups[stratify_by(run)].append(run)
+
+    seen_anchors: dict[tuple[str, ...], GappedMotif] = {}
+    total_tested = 0
+
+    for group_runs in groups.values():
+        if not _has_outcome_variance(group_runs):
+            continue
+        motifs, n_tested = find_gapped_motifs(
+            group_runs,
+            max_length=max_length,
+            min_count=min_count,
+            q_threshold=q_threshold,
+        )
+        total_tested += n_tested
+        for m in motifs:
+            existing = seen_anchors.get(m.anchors)
+            if existing is None or (m.q_value or 1.0) < (existing.q_value or 1.0):
+                seen_anchors[m.anchors] = m
+
+    merged = list(seen_anchors.values())
+    merged.sort(key=lambda m: (m.q_value if m.q_value is not None else 1.0, -abs(m.success_rate - m.baseline_rate)))
+    return merged, total_tested

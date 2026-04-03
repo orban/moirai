@@ -1,12 +1,12 @@
 """Tests for gapped motif discovery."""
 
 from moirai.schema import Step, Result, Run, GappedMotif
-from moirai.analyze.motifs import find_gapped_motifs, _is_subsequence
+from moirai.analyze.motifs import find_gapped_motifs, stratified_find_gapped_motifs, _is_subsequence
 
 
-def _make_run(run_id: str, names: list[str], success: bool) -> Run:
+def _make_run(run_id: str, names: list[str], success: bool, task_id: str = "t1", task_family: str | None = None) -> Run:
     steps = [Step(idx=i, type="tool", name=n) for i, n in enumerate(names)]
-    return Run(run_id=run_id, task_id="t1", steps=steps, result=Result(success=success))
+    return Run(run_id=run_id, task_id=task_id, task_family=task_family, steps=steps, result=Result(success=success))
 
 
 class TestIsSubsequence:
@@ -187,3 +187,89 @@ class TestCLIIntegration:
 
             result = runner.invoke(app, ["patterns", tmpdir, "--gapped"])
             assert result.exit_code == 0
+
+    def test_patterns_stratify_flag(self):
+        """Smoke test: --stratify task_family flag doesn't crash."""
+        from typer.testing import CliRunner
+        from moirai.cli import app
+        import json
+        import tempfile
+        from pathlib import Path
+
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for i in range(5):
+                run = {
+                    "run_id": f"p{i}", "task_id": "t1", "task_family": "alpha",
+                    "steps": [{"idx": j, "type": "tool", "name": n} for j, n in enumerate(["read", "edit", "test"])],
+                    "result": {"success": True},
+                }
+                Path(tmpdir, f"p{i}.json").write_text(json.dumps(run))
+            for i in range(5):
+                run = {
+                    "run_id": f"f{i}", "task_id": "t2", "task_family": "alpha",
+                    "steps": [{"idx": j, "type": "tool", "name": n} for j, n in enumerate(["write", "write", "write"])],
+                    "result": {"success": False},
+                }
+                Path(tmpdir, f"f{i}.json").write_text(json.dumps(run))
+
+            result = runner.invoke(app, ["patterns", tmpdir, "--stratify", "task_family"])
+            assert result.exit_code == 0
+
+
+class TestStratifiedFindGappedMotifs:
+    def test_removes_family_confound(self):
+        """Gapped motifs from cross-family confounds vanish under stratification."""
+        family_a = [
+            _make_run(f"a{i}", ["read", "search", "edit", "test"], True, task_family="alpha")
+            for i in range(6)
+        ]
+        family_b = [
+            _make_run(f"b{i}", ["write", "write", "write", "write"], False, task_family="beta")
+            for i in range(6)
+        ]
+        all_runs = family_a + family_b
+
+        unstratified, _ = find_gapped_motifs(all_runs, max_length=2, min_count=3, q_threshold=1.0)
+        assert len(unstratified) > 0
+
+        stratified, _ = stratified_find_gapped_motifs(
+            all_runs,
+            stratify_by=lambda r: r.task_family,
+            max_length=2, min_count=3, q_threshold=1.0,
+        )
+        assert len(stratified) == 0
+
+    def test_preserves_genuine_gapped_motifs(self):
+        """Real within-family gapped motifs survive stratification."""
+        runs = []
+        for fam in ["alpha", "beta"]:
+            for i in range(5):
+                runs.append(_make_run(f"{fam}_p{i}", ["read", "search", "edit", "test"], True, task_family=fam))
+            for i in range(5):
+                runs.append(_make_run(f"{fam}_f{i}", ["write", "write", "write", "write"], False, task_family=fam))
+
+        stratified, _ = stratified_find_gapped_motifs(
+            runs,
+            stratify_by=lambda r: r.task_family,
+            max_length=2, min_count=3, q_threshold=1.0,
+        )
+        assert len(stratified) > 0
+
+    def test_deduplicates_across_groups(self):
+        """Same gapped pattern in multiple groups keeps the best q-value."""
+        runs = []
+        for fam in ["alpha", "beta"]:
+            for i in range(5):
+                runs.append(_make_run(f"{fam}_p{i}", ["read", "search", "edit", "test"], True, task_family=fam))
+            for i in range(5):
+                runs.append(_make_run(f"{fam}_f{i}", ["write", "write", "write", "write"], False, task_family=fam))
+
+        stratified, _ = stratified_find_gapped_motifs(
+            runs,
+            stratify_by=lambda r: r.task_family,
+            max_length=2, min_count=3, q_threshold=1.0,
+        )
+        anchor_list = [m.anchors for m in stratified]
+        assert len(anchor_list) == len(set(anchor_list))

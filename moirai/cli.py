@@ -260,6 +260,7 @@ def patterns(
     gapped: bool = typer.Option(False, help="Also discover gapped (ordered subsequence) patterns"),
     max_length: int = typer.Option(3, "--max-length", help="Max gapped pattern length (default 3, use 4 for deeper search)"),
     permutation_test: int | None = typer.Option(None, "--permutation-test", help="Run N permutations to estimate empirical FDR"),
+    stratify: str | None = typer.Option(None, "--stratify", help="Stratify motif discovery by field (e.g. task_family) to prevent cross-group confounds"),
     strict: bool = typer.Option(False, help="Treat warnings as errors"),
     model: str | None = typer.Option(None, help="Filter by model"),
     harness: str | None = typer.Option(None, help="Filter by harness"),
@@ -268,16 +269,24 @@ def patterns(
     """Find step patterns that predict success or failure."""
     runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
 
-    from moirai.analyze.motifs import find_gapped_motifs, find_motifs
+    from moirai.analyze.motifs import find_gapped_motifs, find_motifs, stratified_find_motifs, stratified_find_gapped_motifs
     from moirai.viz.terminal import print_motifs
 
-    motifs, n_tested = find_motifs(runs, min_n=min_n, max_n=max_n, min_count=min_count)
+    if stratify:
+        stratify_fn = lambda r: getattr(r, stratify, None) or r.tags.get(stratify)
+        motifs, n_tested = stratified_find_motifs(runs, stratify_by=stratify_fn, min_n=min_n, max_n=max_n, min_count=min_count)
+    else:
+        motifs, n_tested = find_motifs(runs, min_n=min_n, max_n=max_n, min_count=min_count)
 
     all_results: list = list(motifs)
     total_tested = n_tested
 
     if gapped:
-        gapped_motifs, gapped_tested = find_gapped_motifs(runs, max_length=max_length, min_count=min_count)
+        if stratify:
+            stratify_fn = lambda r: getattr(r, stratify, None) or r.tags.get(stratify)
+            gapped_motifs, gapped_tested = stratified_find_gapped_motifs(runs, stratify_by=stratify_fn, max_length=max_length, min_count=min_count)
+        else:
+            gapped_motifs, gapped_tested = find_gapped_motifs(runs, max_length=max_length, min_count=min_count)
         all_results.extend(gapped_motifs)
         total_tested += gapped_tested
         # Re-sort merged results by q-value
@@ -752,6 +761,69 @@ def diagnose(
     else:
         from moirai.viz.terminal import print_diagnosis
         print_diagnosis(result)
+
+
+@app.command()
+def report(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    html: Path = typer.Option(..., help="Output HTML file path"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    model: str | None = typer.Option(None, help="Filter by model"),
+    harness: str | None = typer.Option(None, help="Filter by harness"),
+    task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
+) -> None:
+    """Generate a combined HTML report (summary + patterns + branch analysis)."""
+    runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
+
+    from collections import defaultdict
+    from moirai.analyze.summary import summarize_runs
+    from moirai.analyze.motifs import find_motifs, find_gapped_motifs
+    from moirai.analyze.align import align_runs
+    from moirai.analyze.divergence import find_divergence_points
+
+    console.print("[bold]Running summary...[/bold]")
+    summary_result = summarize_runs(runs)
+
+    console.print("[bold]Finding patterns...[/bold]")
+    motifs, n_tested = find_motifs(runs, min_n=3, max_n=5, min_count=3)
+    gapped, gapped_tested = find_gapped_motifs(runs, max_length=3, min_count=3)
+    total_tested = n_tested + gapped_tested
+
+    console.print("[bold]Analyzing per-task divergence...[/bold]")
+    tasks: dict[str, list] = defaultdict(list)
+    for r in runs:
+        tasks[r.task_id].append(r)
+
+    mixed_tasks = {tid: trs for tid, trs in tasks.items()
+                   if any(r.result.success for r in trs) and any(not r.result.success for r in trs)
+                   and len(trs) >= 3}
+
+    task_divergences = []
+    for tid in sorted(mixed_tasks, key=lambda t: -len(mixed_tasks[t])):
+        task_runs = mixed_tasks[tid]
+        alignment = align_runs(task_runs, level="name")
+        points, _ = find_divergence_points(alignment, task_runs, min_branch_size=1, q_threshold=0.5)
+        task_divergences.append((tid, task_runs, points))
+
+    console.print("[bold]Writing HTML...[/bold]")
+    from moirai.viz.html import write_report_html
+    out = write_report_html(
+        summary=summary_result,
+        motifs=motifs,
+        gapped_motifs=gapped,
+        n_tested=total_tested,
+        task_divergences=task_divergences,
+        runs=runs,
+        path=html,
+    )
+
+    n_motifs = len(motifs) + len(gapped)
+    console.print(
+        f"\n[green]Report written to {out}[/green]\n"
+        f"  {summary_result.run_count} runs, "
+        f"{n_motifs} significant patterns, "
+        f"{len(task_divergences)} mixed-outcome tasks"
+    )
 
 
 def _show_available_values(runs: list[Run], kv_pairs: list[str]) -> None:
