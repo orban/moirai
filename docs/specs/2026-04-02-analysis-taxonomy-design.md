@@ -97,8 +97,8 @@ def compute_transition_bigrams(
 
 Implementation:
 1. Filter to runs with `result.success is not None` and at least one edit/write step
-2. Require at least 2 runs per group (pass and fail). Return empty if either group has <2.
-3. Skip runs with <2 steps (no bigrams possible)
+2. Skip runs with <2 enriched steps after None filtering (no bigrams possible)
+3. Split into pass/fail. Require at least 2 runs per group AFTER step 2 filtering. Return empty if either group has <2.
 4. For each run, extract enriched step name sequence using `step_enriched_name()` from compress.py, filtering None values
 5. For each run, compute bigram counts normalized by `max(1, len(sequence) - 1)` — this is the per-run transition rate
 6. Average per-run rates within each group (pass/fail)
@@ -133,7 +133,7 @@ Add field: `transitions: list[TransitionSignal] = field(default_factory=list)`
 
 ### Changes to run_explain
 
-After computing reasoning metrics, call `compute_transition_bigrams(known)` and attach the result to the report.
+After computing reasoning metrics, call `compute_transition_bigrams(group_runs)` (not `known` — the function owns its own outcome and edit-presence filtering) and attach the result to the report.
 
 ### Changes to print_explanation
 
@@ -163,7 +163,7 @@ Red for fail-correlated, green for pass-correlated. Only show if transitions are
 - test_single_step_runs_excluded — runs with <2 steps produce no bigrams
 - test_sorted_by_absolute_delta — results sorted descending
 
-### Cleanup
+### Cleanup (inline with schema changes)
 
 - Remove `KNOWN_FINDING_CATEGORIES` from schema.py (unused after normalization was removed)
 - Remove unused `seed` parameter from `_cluster_based_groups`
@@ -174,10 +174,3 @@ Red for fail-correlated, green for pass-correlated. Only show if transitions are
 - No LLM classification layer. Haiku semantic classification didn't survive validation.
 - No universal intervention rules. Interventions are framework-specific and outside moirai's scope.
 - No convergence curves or information flow metrics. These didn't predict outcomes.
-
-## Future layers (not implemented here)
-
-Identified by research but not yet validated:
-
-- **Step-level outcome signals:** Did tests improve after an edit? First-green-test latency, regression-after-edit. Directly mechanistic and potentially more actionable than transition counts. Requires test result parsing.
-- **Temporal dynamics:** Step timing, stall duration, acceleration/deceleration. Reveals thrashing vs focused debugging. Requires timestamp data (available in some converters but not all).
