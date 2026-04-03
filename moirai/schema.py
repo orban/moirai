@@ -262,10 +262,15 @@ class ReasoningMetrics:
     n_reasoning_steps: int         # steps that have reasoning text
 
 
-KNOWN_FINDING_CATEGORIES = {
-    "wrong_file", "missing_test", "error_ignored",
-    "wrong_command", "reasoning_gap",
-}
+@dataclass
+class TransitionSignal:
+    """A transition bigram that differs between passing and failing runs."""
+    from_step: str
+    to_step: str
+    pass_rate: float        # avg per-run normalized rate in passing runs
+    fail_rate: float        # avg per-run normalized rate in failing runs
+    delta: float            # pass_rate - fail_rate (positive = pass-correlated)
+    total_count: int        # raw count across all runs
 
 
 @dataclass
@@ -295,6 +300,7 @@ class ExplanationReport:
     reasoning: ReasoningMetrics | None = None         # per-group aggregate
     reasoning_pass: ReasoningMetrics | None = None   # passing runs aggregate
     reasoning_fail: ReasoningMetrics | None = None   # failing runs aggregate
+    transitions: list[TransitionSignal] = field(default_factory=list)
     concordance_tau: float | None = None             # only with --cluster
     concordance_p: float | None = None               # only with --cluster
 

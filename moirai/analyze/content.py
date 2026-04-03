@@ -17,6 +17,7 @@ from moirai.schema import (
     GAP,
     ReasoningMetrics,
     Run,
+    TransitionSignal,
 )
 
 
@@ -115,6 +116,98 @@ def compute_reasoning_metrics(runs: list[Run]) -> ReasoningMetrics | None:
         reasoning_per_step=total_chars / total_steps,
         n_reasoning_steps=total_reasoning_steps,
     )
+
+
+def compute_transition_bigrams(
+    runs: list[Run],
+) -> list[TransitionSignal]:
+    """Compute transition bigram signals between passing and failing runs.
+
+    Only analyzes runs with at least one edit/write step (controls for
+    the trivial confound that runs without edits always fail).
+
+    Normalization: per-run first (bigram_count / (n_steps - 1)), then
+    averaged across runs in each group. This avoids length-weighting bias
+    where one long run dominates the group signal.
+
+    Returns top 5 signals sorted by absolute delta descending.
+    Min count threshold: 10 (hardcoded, not a parameter).
+    """
+    from moirai.compress import step_enriched_name
+
+    # Step 1: filter to runs with known outcome and at least one edit/write step
+    eligible: list[Run] = []
+    for r in runs:
+        if r.result.success is None:
+            continue
+        has_edit = any(s.name in ("edit", "write") for s in r.steps)
+        if not has_edit:
+            continue
+        eligible.append(r)
+
+    # Step 2: extract enriched step sequences, skip runs with <2 enriched steps
+    run_sequences: list[tuple[Run, list[str]]] = []
+    for r in eligible:
+        seq = [
+            name
+            for s in r.steps
+            if (name := step_enriched_name(s)) is not None
+        ]
+        if len(seq) < 2:
+            continue
+        run_sequences.append((r, seq))
+
+    # Step 3: split into pass/fail groups; require >=2 runs per group
+    pass_entries = [(r, seq) for r, seq in run_sequences if r.result.success]
+    fail_entries = [(r, seq) for r, seq in run_sequences if not r.result.success]
+
+    if len(pass_entries) < 2 or len(fail_entries) < 2:
+        return []
+
+    # Steps 4-6: compute per-run normalized bigram rates, then average per group
+    all_bigrams: set[tuple[str, str]] = set()
+    raw_counts: dict[tuple[str, str], int] = defaultdict(int)
+
+    def _group_rates(
+        entries: list[tuple[Run, list[str]]],
+    ) -> dict[tuple[str, str], float]:
+        rates: dict[tuple[str, str], list[float]] = defaultdict(list)
+        for _r, seq in entries:
+            counts: dict[tuple[str, str], int] = defaultdict(int)
+            for a, b in zip(seq, seq[1:]):
+                bigram = (a, b)
+                counts[bigram] += 1
+                raw_counts[bigram] += 1
+                all_bigrams.add(bigram)
+            norm = max(1, len(seq) - 1)
+            for bigram, count in counts.items():
+                rates[bigram].append(count / norm)
+        return {bg: sum(vals) / len(vals) for bg, vals in rates.items()}
+
+    pass_rates = _group_rates(pass_entries)
+    fail_rates = _group_rates(fail_entries)
+
+    # Step 7-8: compute delta, filter by raw count >= 10, take top 5
+    signals: list[TransitionSignal] = []
+    for bigram in all_bigrams:
+        total = raw_counts[bigram]
+        if total < 10:
+            continue
+        pr = pass_rates.get(bigram, 0.0)
+        fr = fail_rates.get(bigram, 0.0)
+        delta = pr - fr
+        signals.append(TransitionSignal(
+            from_step=bigram[0],
+            to_step=bigram[1],
+            pass_rate=pr,
+            fail_rate=fr,
+            delta=delta,
+            total_count=total,
+        ))
+
+    # Step 9: sort by absolute delta descending, take top 5
+    signals.sort(key=lambda s: abs(s.delta), reverse=True)
+    return signals[:5]
 
 
 def sample_runs(
@@ -484,7 +577,7 @@ def run_explain(
     # cluster-based grouping instead. Cluster runs by structural similarity,
     # then analyze each cluster with mixed outcomes.
     if not groups:
-        all_clusters, cluster_skips = _cluster_based_groups(runs, seed)
+        all_clusters, cluster_skips = _cluster_based_groups(runs)
         if task_filter:
             # Apply filter to cluster-based groups (e.g., --task cluster_8)
             if task_filter in all_clusters:
@@ -557,6 +650,8 @@ def run_explain(
         reasoning_pass = compute_reasoning_metrics(pass_runs_list) if pass_runs_list else None
         reasoning_fail = compute_reasoning_metrics(fail_runs_list) if fail_runs_list else None
 
+        transitions = compute_transition_bigrams(group_runs)
+
         reports.append(ExplanationReport(
             task_id=task_id,
             n_runs=len(group_runs),
@@ -571,6 +666,7 @@ def run_explain(
             reasoning=reasoning_all,
             reasoning_pass=reasoning_pass,
             reasoning_fail=reasoning_fail,
+            transitions=transitions,
             concordance_tau=concordance_tau,
             concordance_p=concordance_p,
         ))
@@ -614,7 +710,6 @@ def _presample(
 
 def _cluster_based_groups(
     runs: list[Run],
-    seed: int,
     min_runs: int = 5,
 ) -> tuple[dict[str, list[Run]], dict[str, str]]:
     """Fall back to cluster-based grouping when task-based grouping fails.

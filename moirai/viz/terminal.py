@@ -692,6 +692,15 @@ def print_explanation(report: ExplanationReport) -> None:
         r = report.reasoning
         console.print(f"\n[dim]Reasoning: uncertainty={r.uncertainty_density:.2f}/step, diagnosis={r.diagnosis_density:.2f}/step, {r.n_reasoning_steps} reasoning steps[/dim]")
 
+    # Transition signals (if available)
+    if report.transitions:
+        console.print(f"\n[bold]Transition signals[/bold]")
+        for t in report.transitions[:5]:
+            label = f"{t.from_step} → {t.to_step}"
+            color = "green" if t.delta > 0 else "red"
+            direction = "pass" if t.delta > 0 else "fail"
+            console.print(f"  {label:40s} pass: {t.pass_rate:.1f}/run  fail: {t.fail_rate:.1f}/run  [{color}]Δ={t.delta:+.1f} ■ {direction}[/{color}]")
+
     # Concordance (if --cluster was used)
     if report.concordance_tau is not None:
         p_str = f", p={report.concordance_p:.3f}" if report.concordance_p is not None else ""
