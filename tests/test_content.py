@@ -2,6 +2,8 @@
 
 from moirai.schema import Step, Result, Run, Alignment, DivergencePoint, GAP
 from moirai.analyze.content import (
+    compute_test_centroid,
+    find_exemplar_task,
     select_task_groups, sample_runs, build_prompt, parse_response, invoke_llm,
     compute_reasoning_metrics, compute_transition_bigrams,
 )
@@ -439,6 +441,66 @@ class TestTransitionBigrams:
         signals = compute_transition_bigrams(pass_runs + fail_runs)
         for i in range(len(signals) - 1):
             assert abs(signals[i].delta) >= abs(signals[i + 1].delta)
+
+
+class TestTestCentroid:
+    def test_basic_centroid(self):
+        run = _make_run("r1", "t1", ["read", "edit", "test(pass)", "test(pass)"], True)
+        c = compute_test_centroid(run)
+        assert c is not None
+        # 4 enriched steps, test steps at indices 2 and 3
+        # positions: 2/(4-1)=2/3, 3/(4-1)=1.0, centroid = (2/3 + 1.0)/2 = 5/6
+        assert abs(c - 5 / 6) < 0.01
+
+    def test_no_tests(self):
+        run = _make_run("r1", "t1", ["read", "edit", "read"], True)
+        assert compute_test_centroid(run) is None
+
+    def test_early_vs_late(self):
+        early = _make_run("r1", "t1", ["test(pass)", "read", "edit", "read"], True)
+        late = _make_run("r2", "t1", ["read", "edit", "read", "test(pass)"], True)
+        assert compute_test_centroid(early) < compute_test_centroid(late)
+
+
+class TestFindExemplarTask:
+    def test_finds_task_with_delta(self):
+        groups = {
+            "good": [
+                _make_run("p1", "good", ["read", "edit", "test(pass)"], True),
+                _make_run("p2", "good", ["read", "edit", "test(pass)"], True),
+                _make_run("p3", "good", ["read", "edit", "test(pass)"], True),
+                _make_run("p4", "good", ["read", "edit", "test(pass)"], True),
+                _make_run("p5", "good", ["read", "edit", "test(pass)"], True),
+                _make_run("f1", "good", ["test(fail)", "read", "edit"], False),
+                _make_run("f2", "good", ["test(fail)", "read", "edit"], False),
+                _make_run("f3", "good", ["test(fail)", "read", "edit"], False),
+                _make_run("f4", "good", ["test(fail)", "read", "edit"], False),
+                _make_run("f5", "good", ["test(fail)", "read", "edit"], False),
+            ],
+        }
+        result = find_exemplar_task(
+            groups, compute_test_centroid,
+            min_pass=5, min_fail=5, min_delta=0.1,
+            prefer_step_range=(1, 100),
+        )
+        assert result == "good"
+
+    def test_returns_none_below_delta(self):
+        groups = {
+            "flat": [
+                _make_run(f"p{i}", "flat", ["read", "test(pass)", "edit"], True)
+                for i in range(5)
+            ] + [
+                _make_run(f"f{i}", "flat", ["read", "test(fail)", "edit"], False)
+                for i in range(5)
+            ],
+        }
+        result = find_exemplar_task(
+            groups, compute_test_centroid,
+            min_pass=5, min_fail=5, min_delta=0.5,
+            prefer_step_range=(1, 100),
+        )
+        assert result is None
 
 
 class TestInvokeLlm:

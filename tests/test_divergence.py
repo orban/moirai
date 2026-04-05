@@ -1,7 +1,7 @@
 """Tests for divergence detection."""
 
 from moirai.schema import Alignment, GAP, Step, Result, Run
-from moirai.analyze.divergence import find_divergence_points
+from moirai.analyze.divergence import find_activity_divergences, find_divergence_points
 from moirai.analyze.align import align_runs
 
 
@@ -197,6 +197,153 @@ class TestDivergencePoints:
         alignment = Alignment(run_ids=[], matrix=[], level="type")
         points, _ = find_divergence_points(alignment, [])
         assert points == []
+
+
+class TestActivityDivergences:
+    def test_pass_active_fail_gap(self):
+        """Column where pass runs have steps and fail runs have gaps."""
+        alignment = Alignment(
+            run_ids=["p1", "p2", "p3", "f1", "f2", "f3"],
+            matrix=[
+                ["llm", "tool"],
+                ["llm", "tool"],
+                ["llm", "tool"],
+                ["llm", GAP],
+                ["llm", GAP],
+                ["llm", GAP],
+            ],
+            level="type",
+        )
+        runs = [_make_run("p1", ["llm", "tool"], True),
+                _make_run("p2", ["llm", "tool"], True),
+                _make_run("p3", ["llm", "tool"], True),
+                _make_run("f1", ["llm"], False),
+                _make_run("f2", ["llm"], False),
+                _make_run("f3", ["llm"], False)]
+        result = find_activity_divergences(alignment, runs)
+        # Column 1 should be detected: 3/3 pass active, 0/3 fail active
+        col1 = [r for r in result if r.column == 1]
+        assert len(col1) == 1
+        assert col1[0].pass_active == 3
+        assert col1[0].fail_active == 0
+        assert col1[0].direction > 0  # pass-biased
+
+    def test_fail_active_pass_gap(self):
+        """Column where fail runs have steps and pass runs have gaps."""
+        alignment = Alignment(
+            run_ids=["p1", "p2", "f1", "f2"],
+            matrix=[
+                ["llm", GAP],
+                ["llm", GAP],
+                ["llm", "tool"],
+                ["llm", "tool"],
+            ],
+            level="type",
+        )
+        runs = [_make_run("p1", ["llm"], True),
+                _make_run("p2", ["llm"], True),
+                _make_run("f1", ["llm", "tool"], False),
+                _make_run("f2", ["llm", "tool"], False)]
+        result = find_activity_divergences(alignment, runs)
+        col1 = [r for r in result if r.column == 1]
+        assert len(col1) == 1
+        assert col1[0].direction < 0  # fail-biased
+
+    def test_no_divergence_when_all_active(self):
+        """Column where everyone is active should not appear."""
+        alignment = Alignment(
+            run_ids=["p1", "f1"],
+            matrix=[["llm"], ["llm"]],
+            level="type",
+        )
+        runs = [_make_run("p1", ["llm"], True),
+                _make_run("f1", ["llm"], False)]
+        result = find_activity_divergences(alignment, runs)
+        assert len(result) == 0
+
+    def test_bh_correction_applied(self):
+        """q_value should be populated on all results."""
+        alignment = Alignment(
+            run_ids=["p1", "p2", "f1", "f2"],
+            matrix=[
+                ["llm", "tool", GAP],
+                ["llm", GAP, "tool"],
+                ["llm", GAP, "tool"],
+                ["llm", "tool", GAP],
+            ],
+            level="type",
+        )
+        runs = [_make_run("p1", ["x"] * 3, True),
+                _make_run("p2", ["x"] * 3, True),
+                _make_run("f1", ["x"] * 3, False),
+                _make_run("f2", ["x"] * 3, False)]
+        result = find_activity_divergences(alignment, runs)
+        for r in result:
+            assert r.q_value is not None
+
+    def test_sorted_by_q_value(self):
+        """Results should be sorted by q-value ascending."""
+        alignment = Alignment(
+            run_ids=["p1", "p2", "p3", "f1", "f2", "f3"],
+            matrix=[
+                ["a", "b", "c"],
+                ["a", "b", GAP],
+                ["a", GAP, "c"],
+                ["a", GAP, GAP],
+                ["a", GAP, GAP],
+                ["a", GAP, GAP],
+            ],
+            level="type",
+        )
+        runs = [_make_run("p1", ["x"] * 3, True),
+                _make_run("p2", ["x"] * 3, True),
+                _make_run("p3", ["x"] * 3, True),
+                _make_run("f1", ["x"] * 3, False),
+                _make_run("f2", ["x"] * 3, False),
+                _make_run("f3", ["x"] * 3, False)]
+        result = find_activity_divergences(alignment, runs)
+        q_vals = [r.q_value for r in result if r.q_value is not None]
+        for i in range(len(q_vals) - 1):
+            assert q_vals[i] <= q_vals[i + 1] + 0.01
+
+    def test_active_labels_populated(self):
+        """active_labels should contain the step names at the column."""
+        alignment = Alignment(
+            run_ids=["p1", "p2", "f1", "f2"],
+            matrix=[
+                ["llm", "tool"],
+                ["llm", "judge"],
+                ["llm", GAP],
+                ["llm", GAP],
+            ],
+            level="type",
+        )
+        runs = [_make_run("p1", ["llm", "tool"], True),
+                _make_run("p2", ["llm", "judge"], True),
+                _make_run("f1", ["llm"], False),
+                _make_run("f2", ["llm"], False)]
+        result = find_activity_divergences(alignment, runs)
+        col1 = [r for r in result if r.column == 1]
+        assert len(col1) == 1
+        assert col1[0].active_labels == {"tool": 1, "judge": 1}
+
+    def test_empty_alignment(self):
+        alignment = Alignment(run_ids=[], matrix=[], level="type")
+        assert find_activity_divergences(alignment, []) == []
+
+    def test_q_threshold_filtering(self):
+        """Strict q_threshold should filter non-significant results."""
+        alignment = Alignment(
+            run_ids=["p1", "f1"],
+            matrix=[["llm", "tool"], ["llm", GAP]],
+            level="type",
+        )
+        runs = [_make_run("p1", ["llm", "tool"], True),
+                _make_run("f1", ["llm"], False)]
+        # With only 2 runs, nothing should be significant at q<0.05
+        strict = find_activity_divergences(alignment, runs, q_threshold=0.05)
+        loose = find_activity_divergences(alignment, runs, q_threshold=1.0)
+        assert len(strict) <= len(loose)
 
 
 class TestAlignRunsProgressive:

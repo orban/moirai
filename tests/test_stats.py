@@ -9,6 +9,7 @@ from moirai.analyze.stats import (
     chi_squared_test,
     kendall_tau_b,
     permutation_fdr,
+    sign_test,
 )
 
 
@@ -191,3 +192,41 @@ class TestPermutationFDR:
         _, discoveries = permutation_fdr(membership, outcomes, n_permutations=50, seed=42)
         assert len(discoveries) == 50
         assert all(isinstance(d, int) for d in discoveries)
+
+
+class TestSignTest:
+    def test_sign_test_all_positive(self):
+        """All positive values should yield a small p-value."""
+        values = [1.0, 2.0, 3.0, 4.0, 5.0]
+        p = sign_test(values)
+        assert p is not None
+        assert p < 0.07  # exact: 2 * 0.5^5 = 0.0625
+
+    def test_sign_test_balanced(self):
+        """Equal positive and negative values should yield p close to 1.0."""
+        values = [1.0, -1.0, 2.0, -2.0, 3.0, -3.0]
+        p = sign_test(values)
+        assert p is not None
+        assert p > 0.9
+
+    def test_sign_test_excludes_zeros(self):
+        """Zeros should not count toward the test."""
+        # 5 positives, 0 negatives, but 3 zeros — effective n=5
+        values = [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 4.0, 5.0]
+        p = sign_test(values)
+        assert p is not None
+        assert p < 0.07  # same as all-positive with n=5
+
+    def test_sign_test_too_few(self):
+        """Fewer than 5 non-zero values should return None."""
+        values = [1.0, -1.0, 2.0, 0.0, 0.0]
+        # Only 3 non-zero values
+        p = sign_test(values)
+        assert p is None
+
+    def test_sign_test_strongly_negative(self):
+        """All negative values should also yield a small p-value."""
+        values = [-1.0, -2.0, -3.0, -4.0, -5.0, -6.0]
+        p = sign_test(values)
+        assert p is not None
+        assert p < 0.05
