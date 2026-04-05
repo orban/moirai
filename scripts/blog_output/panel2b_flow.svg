@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 420" style="max-width:700px;width:100%;height:auto;min-height:280px;font-family:'Geist Sans', system-ui, -apple-system, sans-serif">
+  <rect width="700" height="420" fill="#fafaf8"/>
+  <text x="350.0" y="22" text-anchor="middle" font-size="17" font-weight="600" fill="#232220" letter-spacing="-0.02em">Two strategies emerge from the same agent</text>
+  <text x="350.0" y="42" text-anchor="middle" font-size="11" fill="#8a8784">vyperlang/vyper #4385 · 10 runs · same agent, same task, same prompt</text>
+  <rect x="250.0" y="68" width="200" height="32" rx="6" fill="#f2f0ec" stroke="#e5e2de" stroke-width="1"/>
+  <text x="350.0" y="88" text-anchor="middle" font-size="12" font-weight="600" fill="#555350">All 10 runs start here</text>
+  <text x="350.0" y="114" text-anchor="middle" font-size="10" fill="#8a8784">read repo → search code → run setup</text>
+  <line x1="350.0" y1="100" x2="350.0" y2="138" stroke="#e5e2de" stroke-width="1.5"/>
+  <polygon points="350.0,124 366.0,140 350.0,156 334.0,140" fill="#edf2ed" stroke="#5a7a64" stroke-width="2"/>
+  <text x="350.0" y="144" text-anchor="middle" font-size="9" font-weight="700" fill="#5a7a64">?</text>
+  <text x="350.0" y="170" text-anchor="middle" font-size="11" font-weight="600" fill="#5a7a64">Stochastic fork: when does the agent first test?</text>
+  <path d="M334.0,140 Q175,160 175,186" fill="none" stroke="#b84040" stroke-width="1.5"/>
+  <polygon points="171,182 179,182 175,188" fill="#b84040"/>
+  <path d="M366.0,140 Q525,160 525,186" fill="none" stroke="#4a8a56" stroke-width="1.5"/>
+  <polygon points="521,182 529,182 525,188" fill="#4a8a56"/>
+  <rect x="45.0" y="186" width="260" height="200" rx="8" fill="#f5eaea" stroke="#b84040" stroke-width="1.5"/>
+  <text x="175" y="210" text-anchor="middle" font-size="14" font-weight="700" fill="#b84040">Test early, get stuck</text>
+  <text x="175" y="228" text-anchor="middle" font-size="11" fill="#b84040">5 runs · 0/5 pass (0%)</text>
+  <rect x="57.0" y="246" width="236" height="22" rx="4" fill="#fafaf8" stroke="#b84040" stroke-width="1" opacity="0.9"/>
+  <text x="67.0" y="261" font-size="11" font-weight="600" fill="#b84040">test early</text>
+  <text x="289.0" y="261" text-anchor="end" font-size="9" fill="#8a8784">step 5–13</text>
+  <line x1="175" y1="268" x2="175" y2="276" stroke="#e5e2de" stroke-width="1"/>
+  <rect x="57.0" y="276" width="236" height="22" rx="4" fill="#fafaf8" stroke="#b84040" stroke-width="1" opacity="0.9"/>
+  <text x="67.0" y="291" font-size="11" font-weight="600" fill="#b84040">bash loops</text>
+  <text x="289.0" y="291" text-anchor="end" font-size="9" fill="#8a8784">avg 34 bash steps</text>
+  <line x1="175" y1="298" x2="175" y2="306" stroke="#e5e2de" stroke-width="1"/>
+  <rect x="57.0" y="306" width="236" height="22" rx="4" fill="#fafaf8" stroke="#5a7a64" stroke-width="1" opacity="0.9"/>
+  <text x="67.0" y="321" font-size="11" font-weight="600" fill="#5a7a64">few edits</text>
+  <text x="289.0" y="321" text-anchor="end" font-size="9" fill="#8a8784">avg 10 edit steps</text>
+  <line x1="175" y1="328" x2="175" y2="336" stroke="#e5e2de" stroke-width="1"/>
+  <rect x="57.0" y="336" width="236" height="22" rx="4" fill="#fafaf8" stroke="#b84040" stroke-width="1" opacity="0.9"/>
+  <text x="67.0" y="351" font-size="11" font-weight="600" fill="#b84040">barely re-test</text>
+  <text x="289.0" y="351" text-anchor="end" font-size="9" fill="#8a8784">avg 2 total tests</text>
+  <rect x="395.0" y="186" width="260" height="200" rx="8" fill="#edf2ed" stroke="#4a8a56" stroke-width="1.5"/>
+  <text x="525" y="210" text-anchor="middle" font-size="14" font-weight="700" fill="#4a8a56">Explore first, test after editing</text>
+  <text x="525" y="228" text-anchor="middle" font-size="11" fill="#4a8a56">5 runs · 5/5 pass (100%)</text>
+  <rect x="407.0" y="246" width="236" height="22" rx="4" fill="#fafaf8" stroke="#5a7a64" stroke-width="1" opacity="0.9"/>
+  <text x="417.0" y="261" font-size="11" font-weight="600" fill="#5a7a64">search deeply</text>
+  <text x="639.0" y="261" text-anchor="end" font-size="9" fill="#8a8784">read + grep</text>
+  <line x1="525" y1="268" x2="525" y2="276" stroke="#e5e2de" stroke-width="1"/>
+  <rect x="407.0" y="276" width="236" height="22" rx="4" fill="#fafaf8" stroke="#5a7a64" stroke-width="1" opacity="0.9"/>
+  <text x="417.0" y="291" font-size="11" font-weight="600" fill="#5a7a64">edit with context</text>
+  <text x="639.0" y="291" text-anchor="end" font-size="9" fill="#8a8784">avg 10 edit steps</text>
+  <line x1="525" y1="298" x2="525" y2="306" stroke="#e5e2de" stroke-width="1"/>
+  <rect x="407.0" y="306" width="236" height="22" rx="4" fill="#fafaf8" stroke="#4a8a56" stroke-width="1" opacity="0.9"/>
+  <text x="417.0" y="321" font-size="11" font-weight="600" fill="#4a8a56">test after changes</text>
+  <text x="639.0" y="321" text-anchor="end" font-size="9" fill="#8a8784">avg 10 total tests</text>
+  <line x1="525" y1="328" x2="525" y2="336" stroke="#e5e2de" stroke-width="1"/>
+  <rect x="407.0" y="336" width="236" height="22" rx="4" fill="#fafaf8" stroke="#4a8a56" stroke-width="1" opacity="0.9"/>
+  <text x="417.0" y="351" font-size="11" font-weight="600" fill="#4a8a56">iterate: edit → test</text>
+  <text x="639.0" y="351" text-anchor="end" font-size="9" fill="#8a8784">converge on fix</text>
+  <text x="350.0" y="410" text-anchor="middle" font-size="11" fill="#555350">The agent doesn’t choose a strategy. Stochastic variation determines which path it takes.</text>
+</svg>
