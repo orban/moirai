@@ -94,12 +94,7 @@ def _uncertainty_density(run: Run) -> float | None:
 
     Returns None if run has no reasoning steps.
     """
-    # Import the regex -- handle both the renamed public version and the
-    # current private name for backward compatibility during transition.
-    try:
-        from moirai.analyze.content import UNCERTAINTY_RE
-    except ImportError:
-        from moirai.analyze.content import _UNCERTAINTY_RE as UNCERTAINTY_RE  # type: ignore[attr-defined]
+    from moirai.analyze.content import UNCERTAINTY_RE
 
     n_reasoning = 0
     n_matches = 0
@@ -196,41 +191,7 @@ def within_task_experiment(
     Across tasks: sign test (exact binomial) on the per-task deltas.
     Skip tasks where either group has < min_group_size runs.
     """
-    deltas: list[float] = []
-    all_pass_vals: list[float] = []
-    all_fail_vals: list[float] = []
-
-    for task_id, runs in task_runs.items():
-        # Compute feature for each run
-        valued: list[tuple[float, bool]] = []
-        for r in runs:
-            v = feature_fn(r)
-            if v is not None and r.result.success is not None:
-                valued.append((v, r.result.success))
-
-        if len(valued) < 2 * min_group_size:
-            continue
-
-        # Collect pass/fail values for global means
-        for v, success in valued:
-            if success:
-                all_pass_vals.append(v)
-            else:
-                all_fail_vals.append(v)
-
-        # Median split
-        values = sorted(v for v, _ in valued)
-        median = values[len(values) // 2]
-
-        high = [(v, s) for v, s in valued if v > median]
-        low = [(v, s) for v, s in valued if v <= median]
-
-        if len(high) < min_group_size or len(low) < min_group_size:
-            continue
-
-        high_pass_rate = sum(1 for _, s in high if s) / len(high)
-        low_pass_rate = sum(1 for _, s in low if s) / len(low)
-        deltas.append(high_pass_rate - low_pass_rate)
+    deltas = per_task_deltas(task_runs, feature_fn, min_group_size)
 
     if not deltas:
         return ExperimentResult(delta_pp=0.0, p_value=None, n_tasks=0)
@@ -252,8 +213,8 @@ def per_task_deltas(
 ) -> list[float]:
     """Return the raw per-task pass-rate deltas from a median-split experiment.
 
-    Same logic as within_task_experiment but returns the individual deltas
-    instead of aggregating. Useful for histograms and diagnostics.
+    For each task: compute feature per run, split at median (HIGH > median,
+    LOW <= median), compare pass rates. Returns the list of per-task deltas.
     """
     deltas: list[float] = []
 
@@ -322,10 +283,11 @@ def rank_features(
         # Full experiment
         exp = within_task_experiment(task_runs, spec.compute)
 
-        # Compute pass/fail means
-        pass_vals = [spec.compute(r) for r in runs
+        # Compute pass/fail means from mixed-outcome tasks only
+        mixed_runs = [r for task_r in task_runs.values() for r in task_r]
+        pass_vals = [spec.compute(r) for r in mixed_runs
                      if r.result.success is True]
-        fail_vals = [spec.compute(r) for r in runs
+        fail_vals = [spec.compute(r) for r in mixed_runs
                      if r.result.success is False]
         pass_vals = [v for v in pass_vals if v is not None]
         fail_vals = [v for v in fail_vals if v is not None]

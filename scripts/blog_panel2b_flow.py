@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from moirai.schema import Run, Step, Result
 from moirai.compress import step_enriched_name, phase_sequence
 from moirai.analyze.content import compute_test_centroid
-from scripts.blog_design import (
+from blog_design import (
     BG, TEXT, TEXT_MID, TEXT_MUTED, PASS_COLOR, FAIL_COLOR, ACCENT,
     ACCENT_SOFT, SURFACE, BORDER, FONT_BODY, svg_header, title_block,
 )

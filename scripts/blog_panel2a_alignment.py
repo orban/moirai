@@ -18,7 +18,7 @@ from moirai.schema import Run, Step, Result, GAP
 from moirai.compress import step_enriched_name
 from moirai.analyze.align import align_runs
 from moirai.analyze.content import compute_test_centroid
-from scripts.blog_design import (
+from blog_design import (
     step_color, BG, TEXT, TEXT_MID, TEXT_MUTED, PASS_COLOR, FAIL_COLOR,
     BORDER, SURFACE, FONT_BODY, svg_header, title_block, MARGIN,
 )

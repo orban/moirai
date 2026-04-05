@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from moirai.load import load_runs
 from moirai.analyze.content import select_task_groups
 from moirai.analyze.features import per_task_deltas, _test_position_centroid
-from scripts.blog_design import (
+from blog_design import (
     BG, TEXT, TEXT_MID, TEXT_MUTED, NEUTRAL_DOT, BORDER, SURFACE,
     FONT_BODY, svg_header, title_block,
 )

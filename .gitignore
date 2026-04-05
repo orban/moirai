@@ -16,3 +16,4 @@ htmlcov/
 !moirai/viz/templates/*.html
 .agent-workspace/
 viewer/node_modules/
+scripts/blog_output/
