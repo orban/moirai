@@ -223,6 +223,8 @@ def parse_sweagent_traj(traj_path: Path) -> tuple[list[dict], dict]:
     steps: list[dict] = []
 
     for idx, entry in enumerate(trajectory):
+        if not isinstance(entry, dict):
+            continue
         thought = entry.get("thought", "")
         action = entry.get("action", "")
         observation = entry.get("observation", "")
@@ -301,6 +303,8 @@ def parse_openhands_traj(traj_path: Path) -> tuple[list[dict], dict]:
     tc_id_to_step: dict[str, int] = {}
 
     for msg in data:
+        if not isinstance(msg, dict):
+            continue
         role = msg.get("role", "")
 
         if role == "system":
@@ -602,6 +606,8 @@ def parse_generic_json_traj(traj_path: Path) -> tuple[list[dict], dict]:
             steps: list[dict] = []
             idx = 0
             for msg in messages:
+                if not isinstance(msg, dict):
+                    continue
                 role = msg.get("role", "")
                 content = str(msg.get("content", ""))[:500]
                 if role == "assistant":
@@ -738,7 +744,10 @@ def derive_agent_name(submission_name: str, metadata: dict) -> str:
     # Prefer metadata-provided name
     org = metadata.get("org", "")
     if org:
-        return org.lower().replace(" ", "-")
+        if isinstance(org, list):
+            org = org[0] if org else ""
+        if org:
+            return org.lower().replace(" ", "-")
 
     # Parse from submission name: <date>_<agent>_<model> or <date>_<agent-name>
     parts = submission_name.split("_", 1)
@@ -1027,10 +1036,16 @@ def main():
     total_with_steps = 0
     total_resolved = 0
 
+    errors: list[str] = []
     for sub_path, sub_name in submissions:
         print(f"\nconverting {sub_name}...", file=sys.stderr)
 
-        runs = convert_submission(sub_path, args.split, sub_name)
+        try:
+            runs = convert_submission(sub_path, args.split, sub_name)
+        except Exception as e:
+            print(f"  ERROR: {e}", file=sys.stderr)
+            errors.append(f"{sub_name}: {e}")
+            continue
 
         if args.require_trajs:
             before = len(runs)
@@ -1067,6 +1082,10 @@ def main():
 
     print(f"\ntotal: {total_runs} runs, {total_with_steps} with steps, {total_resolved} resolved", file=sys.stderr)
     print(f"output: {output_dir}", file=sys.stderr)
+    if errors:
+        print(f"\n{len(errors)} submissions failed:", file=sys.stderr)
+        for err in errors:
+            print(f"  {err}", file=sys.stderr)
 
 
 if __name__ == "__main__":
