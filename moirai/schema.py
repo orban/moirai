@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, NamedTuple
 
 
 KNOWN_STEP_TYPES = {"llm", "tool", "system", "memory", "compaction", "judge", "error", "handoff"}
@@ -94,6 +95,57 @@ class DivergencePoint:
     q_value: float | None = None          # BH-adjusted p-value
     min_branch_size: int = 0              # smallest branch count — low = unstable
     phase_context: str | None = None      # e.g. "explore→[modify] vs explore→[explore]"
+
+
+@dataclass
+class ActivityDivergence:
+    """A column where having a step (vs gap) predicts outcome.
+
+    Tests the 2×2 table: (active/gap) × (pass/fail) via Fisher's exact.
+    Complements DivergencePoint which tests different step *types*.
+    """
+    column: int
+    pass_active: int                      # pass runs with a step here
+    pass_gap: int                         # pass runs with a gap here
+    fail_active: int                      # fail runs with a step here
+    fail_gap: int                         # fail runs with a gap here
+    p_value: float                        # Fisher's exact (two-sided)
+    q_value: float | None = None          # BH-adjusted
+    direction: float = 0.0                # pass_rate - fail_rate of being active (>0 = pass-biased)
+    active_labels: dict[str, int] = field(default_factory=dict)  # step names at this column
+    phase_context: str | None = None
+
+
+@dataclass(frozen=True)
+class FeatureSpec:
+    """Definition of a behavioral feature in the registry."""
+    name: str
+    compute: Callable  # (Run) -> float | None
+    direction: Literal["positive", "negative"]
+    description: str
+
+
+class ExperimentResult(NamedTuple):
+    """Result of a within-task median-split natural experiment."""
+    delta_pp: float
+    p_value: float | None
+    n_tasks: int
+
+
+@dataclass
+class FeatureResult:
+    """Ranked result for one behavioral feature."""
+    name: str
+    description: str
+    direction: Literal["positive", "negative"]
+    delta_pp: float
+    p_value: float | None
+    q_value: float | None
+    split_half: bool
+    pass_mean: float
+    fail_mean: float
+    n_tasks: int
+    n_runs: int
 
 
 @dataclass

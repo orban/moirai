@@ -330,6 +330,36 @@ def _hypergeom_pmf(k: int, N: int, K: int, n: int) -> float | None:
         return None
 
 
+def sign_test(values: list[float]) -> float | None:
+    """Two-sided sign test on a list of values.
+
+    Counts positives and negatives (zeros EXCLUDED).
+    Returns p-value from exact binomial test under H0: P(positive) = 0.5.
+    Returns None if fewer than 5 non-zero values.
+    """
+    n_pos = sum(1 for v in values if v > 0)
+    n_neg = sum(1 for v in values if v < 0)
+    n = n_pos + n_neg
+    if n < 5:
+        return None
+    # Exact two-sided binomial: P(X >= max(n_pos, n_neg)) * 2, capped at 1.0
+    k = max(n_pos, n_neg)
+    p_tail = 0.0
+    for x in range(k, n + 1):
+        p_tail += _binom_pmf(x, n, 0.5)
+    return min(2.0 * p_tail, 1.0)
+
+
+def _binom_pmf(k: int, n: int, p: float) -> float:
+    """Binomial probability mass function."""
+    if k < 0 or k > n:
+        return 0.0
+    log_coeff = _log_comb(n, k)
+    if log_coeff == float("-inf"):
+        return 0.0
+    return math.exp(log_coeff + k * math.log(p) + (n - k) * math.log(1 - p))
+
+
 def _log_comb(n: int, k: int) -> float:
     """Log of binomial coefficient C(n, k)."""
     if k < 0 or k > n:

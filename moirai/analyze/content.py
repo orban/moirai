@@ -62,9 +62,11 @@ def select_task_groups(
     return qualifying, skip_reasons
 
 
-_UNCERTAINTY_RE = re.compile(
-    r'\bmaybe\b|\bmight\b|\bperhaps\b|\bpossibly\b|\bnot sure\b'
-    r'|\blet me try\b|\battempt\b',
+UNCERTAINTY_RE = re.compile(
+    r'\bmaybe\b|\bmight\b|\bpossibly\b'           # hedging words
+    r'|\bactually,'                                 # self-correction marker
+    r'|\blet me (?:try|step back|reconsider)\b'     # exploration/backtracking
+    r'|\banother approach\b',                        # approach abandonment
     re.IGNORECASE,
 )
 _CAUSAL_RE = re.compile(
@@ -80,6 +82,87 @@ _DIAGNOSIS_RE = re.compile(
 _CODE_REF_RE = re.compile(
     r'\.py\b|line \d+|def \w+|class \w+|import \w+',
 )
+
+
+def compute_test_centroid(run: Run) -> float | None:
+    """Normalized position (0-1) of the center of mass of test steps.
+
+    Returns None if the run has no test steps. Uses enriched step names
+    to identify test steps (any name starting with 'test(').
+    """
+    from moirai.compress import step_enriched_name
+
+    enriched = [step_enriched_name(s) for s in run.steps]
+    enriched = [e for e in enriched if e is not None]
+    if not enriched:
+        return None
+
+    n = len(enriched)
+    if n == 1:
+        # Single step: position is 0.0 regardless
+        test_positions = [
+            0.0
+            for _i, name in enumerate(enriched)
+            if name.startswith("test(")
+        ]
+    else:
+        test_positions = [
+            i / (n - 1)
+            for i, name in enumerate(enriched)
+            if name.startswith("test(")
+        ]
+    if not test_positions:
+        return None
+
+    return sum(test_positions) / len(test_positions)
+
+
+def find_exemplar_task(
+    task_groups: dict[str, list[Run]],
+    feature_fn,
+    min_pass: int = 5,
+    min_fail: int = 5,
+    min_delta: float = 0.05,
+    prefer_step_range: tuple[int, int] = (30, 70),
+) -> str | None:
+    """Find a task that best exemplifies a behavioral feature difference.
+
+    Args:
+        task_groups: {task_id: [runs]} from select_task_groups()
+        feature_fn: callable(Run) -> float | None, the feature to compare
+        min_pass/min_fail: minimum runs per outcome
+        min_delta: minimum pass_mean - fail_mean to qualify
+        prefer_step_range: ideal average step count range
+
+    Returns the task_id with the largest feature delta that has
+    enough runs and reasonable step counts, or None.
+    """
+    candidates = []
+    for task_id, runs in task_groups.items():
+        pass_vals = [feature_fn(r) for r in runs if r.result.success is True]
+        fail_vals = [feature_fn(r) for r in runs if r.result.success is False]
+        pass_vals = [v for v in pass_vals if v is not None]
+        fail_vals = [v for v in fail_vals if v is not None]
+
+        if len(pass_vals) < min_pass or len(fail_vals) < min_fail:
+            continue
+
+        delta = sum(pass_vals) / len(pass_vals) - sum(fail_vals) / len(fail_vals)
+        if abs(delta) < min_delta:
+            continue
+
+        avg_steps = sum(len(r.steps) for r in runs) / len(runs)
+        lo, hi = prefer_step_range
+        in_range = lo <= avg_steps <= hi
+
+        candidates.append((task_id, delta, avg_steps, in_range))
+
+    if not candidates:
+        return None
+
+    # Prefer tasks in step range, then by delta
+    candidates.sort(key=lambda x: (-x[3], -abs(x[1])))
+    return candidates[0][0]
 
 
 def compute_reasoning_metrics(runs: list[Run]) -> ReasoningMetrics | None:
@@ -100,7 +183,7 @@ def compute_reasoning_metrics(runs: list[Run]) -> ReasoningMetrics | None:
                 continue
             total_reasoning_steps += 1
             total_chars += len(reasoning)
-            total_uncertainty += len(_UNCERTAINTY_RE.findall(reasoning))
+            total_uncertainty += len(UNCERTAINTY_RE.findall(reasoning))
             total_causal += len(_CAUSAL_RE.findall(reasoning))
             total_diagnosis += len(_DIAGNOSIS_RE.findall(reasoning))
             total_code_refs += len(_CODE_REF_RE.findall(reasoning))

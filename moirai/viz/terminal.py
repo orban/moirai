@@ -705,3 +705,52 @@ def print_explanation(report: ExplanationReport) -> None:
     if report.concordance_tau is not None:
         p_str = f", p={report.concordance_p:.3f}" if report.concordance_p is not None else ""
         console.print(f"[dim]Concordance: τ={report.concordance_tau:.2f}{p_str}[/dim]")
+
+
+def print_features(results: list, runs: list[Run] | None = None) -> None:
+    """Print ranked behavioral features table."""
+    if not results:
+        console.print("[yellow]No features computed.[/yellow]")
+        return
+
+    # Header
+    n_tasks = max(r.n_tasks for r in results) if results else 0
+    n_runs = len(runs) if runs else sum(r.n_runs for r in results)
+    console.print(f"\n[bold]Behavioral features[/bold] — {n_tasks:,} mixed-outcome tasks, {n_runs:,} runs\n")
+
+    # Column headers
+    console.print(
+        f"  {'Feature':<36s} {'Delta':>8s}  {'p-value':>8s}  {'q-value':>8s}  {'Split-half':>10s}"
+    )
+    console.print(f"  {'─' * 36} {'─' * 8}  {'─' * 8}  {'─' * 8}  {'─' * 10}")
+
+    for r in results:
+        # Format delta with sign and pp suffix
+        sign = "+" if r.delta_pp >= 0 else ""
+        delta_str = f"{sign}{r.delta_pp:.1f}pp"
+
+        # Format p-value
+        if r.p_value is None:
+            p_str = "—"
+        elif r.p_value < 0.001:
+            p_str = "<0.001"
+        else:
+            p_str = f"{r.p_value:.3f}"
+
+        # Format q-value
+        if r.q_value is None:
+            q_str = "—"
+        elif r.q_value < 0.001:
+            q_str = "<0.001"
+        else:
+            q_str = f"{r.q_value:.3f}"
+
+        # Split-half indicator
+        sh_str = "[green]✓[/green]" if r.split_half else "[dim]—[/dim]"
+
+        # Color the delta
+        color = "green" if r.delta_pp > 0 else "red" if r.delta_pp < 0 else "dim"
+        console.print(
+            f"  {r.name:<36s} [{color}]{delta_str:>8s}[/{color}]"
+            f"  {p_str:>8s}  {q_str:>8s}  {sh_str:>10s}"
+        )

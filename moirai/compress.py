@@ -4,7 +4,40 @@ Transforms raw step sequences into human-readable compressed representations.
 """
 from __future__ import annotations
 
+import re
+
 from moirai.schema import Run, Step
+
+
+# --- Test detection (shared with converters) ---
+
+_TEST_KEYWORDS = (
+    "pytest", "python -m pytest", "python3 -m pytest",
+    "tox ", "python -m tox",
+    "make test", "make check",
+    "unittest", "python -m unittest",
+    "cargo test", "go test", "npm test", "npm run test",
+    "nosetests",
+)
+
+_TEST_SCRIPT_RE = re.compile(r'\bpython3?\s+\S*test\S*\.py\b')
+
+_CD_PREFIX_RE = re.compile(r'^cd\s+\S+\s*(?:&&|;)\s*', re.DOTALL)
+
+
+def _strip_cd_prefix(cmd: str) -> str:
+    """Strip leading 'cd /path && ' or 'cd /path ; ' prefix."""
+    m = _CD_PREFIX_RE.match(cmd)
+    return m.string[m.end():] if m else cmd
+
+
+def _is_test_command(cmd_lower: str) -> bool:
+    """Check if a command is a test invocation, handling chained commands."""
+    if any(kw in cmd_lower for kw in _TEST_KEYWORDS):
+        return True
+    if _TEST_SCRIPT_RE.search(cmd_lower):
+        return True
+    return False
 
 
 # --- Phase classification ---
@@ -58,15 +91,25 @@ def step_enriched_name(step: Step) -> str | None:
 
     Returns None for noise steps.
     Combines step name with semantic context from attrs:
-      read(source), read(config), read(test_file)
-      search(specific), search(glob)
-      bash(explore), bash(python), bash(setup)
+      read(source), read(config), read(test_file), read(docs), read(dir)
+      search(specific), search(glob), search(grep_targeted), search(grep_recursive)
+      test(pass), test(fail)
+      bash(python), bash(setup), bash(explore), bash(other)
       edit(source), write(source), etc.
     """
     if step.name in NOISE_STEPS:
         return None
     if step.name == "test_result":
         return "test(fail)" if step.status != "ok" else "test(pass)"
+    if step.name == "test":
+        return "test(fail)" if step.status != "ok" else "test(pass)"
+
+    # Check for test commands hidden in any bash-family step
+    cmd = step.attrs.get("command", "")
+    if cmd and (step.name.startswith("bash") or step.name in ("bash", "test")):
+        cmd_lower = cmd.lower()
+        if _is_test_command(cmd_lower):
+            return "test(fail)" if step.status != "ok" else "test(pass)"
 
     # If no attrs, fall back to plain name
     if not step.attrs:
@@ -87,25 +130,66 @@ def step_enriched_name(step: Step) -> str | None:
             return f"{step.name}(source)"
         if ext in (".json", ".toml", ".yaml", ".yml", ".cfg", ".ini"):
             return f"{step.name}(config)"
+        if ext in (".rst", ".md", ".txt"):
+            return f"{step.name}(docs)"
+        if not ext and not basename.startswith("."):
+            return f"{step.name}(dir)"
         return f"{step.name}(other)"
 
-    # Search: glob vs specific
+    # Search: check both pattern attr and command attr
     pat = step.attrs.get("pattern", "")
-    if pat and step.name == "search":
-        return "search(glob)" if "*" in pat else "search(specific)"
+    if step.name == "search":
+        if pat:
+            return "search(glob)" if "*" in pat else "search(specific)"
+        if cmd:
+            cmd_lower = cmd.lower()
+            if " -r " in cmd_lower or " -r" in cmd_lower or "--recursive" in cmd_lower:
+                return "search(grep_recursive)"
+            return "search(grep_targeted)"
+        return "search"
 
-    # Bash: classify by command content
-    cmd = step.attrs.get("command", "")
-    if cmd and step.name == "bash":
+    # Bash: classify by command content (strip cd prefix first)
+    if cmd and step.name.startswith("bash"):
         cmd_lower = cmd.lower()
-        if any(kw in cmd_lower for kw in ("ls ", "find ", "tree ", "du ")):
-            return "bash(explore)"
-        if any(kw in cmd_lower for kw in ("python", "pip ", "uv ", "node ", "npm ")):
+        effective = _strip_cd_prefix(cmd_lower)
+
+        # Grep/search commands
+        if any(effective.startswith(p) for p in ("grep ", "rg ", "ag ", "ack ")):
+            if " -r " in cmd_lower or " -r" in cmd_lower or "--recursive" in cmd_lower:
+                return "search(grep_recursive)"
+            return "search(grep_targeted)"
+
+        # Find commands
+        if effective.startswith("find "):
+            return "search(find)"
+
+        # Python execution
+        if any(effective.startswith(p) for p in ("python ", "python3 ")):
+            # Check for test scripts
+            if _TEST_SCRIPT_RE.search(effective):
+                return "test(fail)" if step.status != "ok" else "test(pass)"
             return "bash(python)"
-        if any(kw in cmd_lower for kw in ("cat ", "head ", "tail ", "less ", "wc ")):
+
+        # Read commands
+        if any(effective.startswith(p) for p in ("cat ", "head ", "tail ", "less ", "wc ")):
             return "bash(read)"
-        if any(kw in cmd_lower for kw in ("mkdir ", "touch ", "chmod ", "git ")):
+
+        # Navigation
+        if any(effective.startswith(p) for p in ("ls ", "tree ", "du ")):
+            return "bash(explore)"
+        if effective.startswith("pwd") or effective == "pwd":
+            return "bash(explore)"
+
+        # Setup/install
+        if any(effective.startswith(p) for p in ("pip ", "pip3 ", "apt ", "conda ", "uv ")):
             return "bash(setup)"
+        if any(effective.startswith(p) for p in ("mkdir ", "touch ", "chmod ", "mv ", "cp ", "rm ")):
+            return "bash(setup)"
+
+        # Git
+        if effective.startswith("git "):
+            return "bash(git)"
+
         return "bash(other)"
 
     return step.name

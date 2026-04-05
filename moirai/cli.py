@@ -165,6 +165,9 @@ def branch(
     model: str | None = typer.Option(None, help="Filter by model"),
     harness: str | None = typer.Option(None, help="Filter by harness"),
     task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
+    task: str | None = typer.Option(None, "--task", help="Filter to a specific task ID"),
+    feature: str | None = typer.Option(None, "--feature",
+        help="Annotate runs with a behavioral feature (from moirai features)"),
     html: Path | None = typer.Option(None, help="Write HTML output to path"),
     analyze: bool = typer.Option(False, help="Run LLM analysis on divergence points (requires anthropic SDK)"),
     viewer: Path | None = typer.Option(None, help="Write interactive heatmap viewer HTML"),
@@ -187,9 +190,27 @@ def branch(
                    if any(r.result.success for r in trs) and any(not r.result.success for r in trs)
                    and len(trs) >= 3}
 
+    # Filter to specific task if requested
+    if task:
+        if task in mixed_tasks:
+            mixed_tasks = {task: mixed_tasks[task]}
+        else:
+            err_console.print(f"[red]Task '{task}' not found or has no mixed outcomes.[/red]")
+            raise typer.Exit(2)
+
     if not mixed_tasks:
         console.print("No tasks with mixed pass/fail outcomes (need 3+ runs per task)")
         raise typer.Exit(0)
+
+    # Resolve feature spec if requested
+    feature_spec = None
+    if feature:
+        from moirai.analyze.features import FEATURES as _FEATURES
+        feature_spec = next((f for f in _FEATURES if f.name == feature), None)
+        if feature_spec is None:
+            valid = [f.name for f in _FEATURES]
+            err_console.print(f"[red]Unknown feature '{feature}'. Valid: {', '.join(valid)}[/red]")
+            raise typer.Exit(2)
 
     console.print(f"[bold]{len(mixed_tasks)} tasks with mixed outcomes[/bold] (out of {len(tasks)} total)\n")
 
@@ -218,6 +239,32 @@ def branch(
                 tau_str = f", concordance: τ={tau:.2f}"
 
         console.print(f"[bold]{tid}[/bold]: {len(task_runs)} runs ({n_pass}P/{n_fail}F), aligned to {n_cols} columns{tau_str}")
+
+        # Feature annotation (if --feature was given)
+        if feature_spec is not None:
+            valued = [(r, feature_spec.compute(r)) for r in task_runs]
+            valued_nums = [(r, v) for r, v in valued if v is not None]
+            if valued_nums:
+                sorted_vals = sorted(v for _, v in valued_nums)
+                median = sorted_vals[len(sorted_vals) // 2]
+                high = [(r, v) for r, v in valued_nums if v > median]
+                low = [(r, v) for r, v in valued_nums if v <= median]
+                high_pass = sum(1 for r, _ in high if r.result.success) / len(high) if high else 0
+                low_pass = sum(1 for r, _ in low if r.result.success) / len(low) if low else 0
+                direction = "higher" if feature_spec.direction == "positive" else "lower"
+
+                console.print(f"\n  [bold]Feature: {feature_spec.name}[/bold]"
+                              f" [dim]({feature_spec.description}, {direction} = better)[/dim]")
+                console.print(f"  Median split: HIGH (>{median:.2f}) = {high_pass:.0%} pass"
+                              f" | LOW (\u2264{median:.2f}) = {low_pass:.0%} pass")
+
+                for r, v in sorted(valued_nums, key=lambda x: x[1]):
+                    outcome = "[green]pass[/green]" if r.result.success else "[red]fail[/red]"
+                    group = "[bold]HIGH[/bold]" if v > median else "[dim]LOW[/dim]"
+                    console.print(f"    {outcome}  {feature_spec.name}: {v:.2f}  {group}")
+                console.print()
+            else:
+                console.print(f"  [dim]No runs have data for {feature_spec.name}[/dim]\n")
 
         if not points:
             console.print("  [dim]No significant divergence points[/dim]\n")
@@ -642,24 +689,6 @@ def divergence(
             console.print("\n" + "=" * 80 + "\n")
 
 
-@app.command()
-def report(
-    path: Path = typer.Argument(..., help="Path to a run file or directory"),
-    output: Path = typer.Option("report.html", "--output", "-o", help="Output HTML file"),
-    strict: bool = typer.Option(False, help="Treat warnings as errors"),
-    model: str | None = typer.Option(None, help="Filter by model"),
-    harness: str | None = typer.Option(None, help="Filter by harness"),
-    task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
-) -> None:
-    """Generate diagnosis report with funnel, transitions, and trajectory strips."""
-    runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
-
-    from moirai.viz.report import write_report
-
-    out = write_report(runs, output)
-    console.print(f"Report written to {out}")
-
-
 def _split_cohorts(
     runs: list[Run],
     baseline_filters: list[str],
@@ -846,3 +875,293 @@ def _show_available_values(runs: list[Run], kv_pairs: list[str]) -> None:
 
         if values:
             err_console.print(f"  available {key} values: {', '.join(sorted(values))}")
+
+
+@app.command()
+def export(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    format: str = typer.Option("dpo", "--format", "-f", help="Export format (dpo)"),
+    output: Path = typer.Option("moirai_export.jsonl", "--output", "-o", help="Output file"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    model: str | None = typer.Option(None, help="Filter by model"),
+    harness: str | None = typer.Option(None, help="Filter by harness"),
+    task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
+    max_pairs_per_task: int = typer.Option(25, "--max-per-task", help="Max pass*fail pairs per task"),
+    min_steps: int = typer.Option(3, "--min-steps", help="Minimum steps for a run to be included"),
+    min_content: int = typer.Option(50, "--min-content", help="Min chars in both chosen and rejected"),
+    max_position: float = typer.Option(0.8, "--max-position", help="Max normalized divergence position (0-1)"),
+) -> None:
+    """Export analysis results in machine-consumable formats.
+
+    Currently supports DPO preference pair extraction: for each task with
+    mixed outcomes, aligns pass/fail trajectory pairs and extracts
+    (prompt, chosen, rejected) triples at divergence points.
+    """
+    import json
+
+    if format != "dpo":
+        err_console.print(f"[red]Unknown format: {format}. Supported: dpo[/red]")
+        raise typer.Exit(1)
+
+    runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
+
+    # Filter to runs with enough steps and known outcomes
+    runs = [r for r in runs if len(r.steps) >= min_steps and r.result.success is not None]
+
+    from collections import defaultdict
+    tasks: dict[str, list[Run]] = defaultdict(list)
+    for r in runs:
+        tasks[r.task_id].append(r)
+
+    # Find mixed-outcome tasks
+    mixed = {
+        tid: trs for tid, trs in tasks.items()
+        if any(r.result.success for r in trs) and any(not r.result.success for r in trs)
+    }
+
+    console.print(f"[bold]{len(runs)} runs, {len(mixed)} mixed-outcome tasks[/bold]")
+
+    from moirai.analyze.dpo import extract_pairwise_preferences, format_pair_as_dpo
+
+    total_pairs = 0
+    total_with_reasoning = 0
+    skipped_position = 0
+    skipped_content = 0
+    skipped_dedup = 0
+
+    with open(output, "w") as fh:
+        for tid in sorted(mixed):
+            task_runs = mixed[tid]
+            pass_runs = [r for r in task_runs if r.result.success]
+            fail_runs = [r for r in task_runs if not r.result.success]
+
+            # Cap to avoid combinatorial explosion
+            import math
+            max_per_side = max(2, int(math.sqrt(max_pairs_per_task)))
+            if len(pass_runs) > max_per_side:
+                pass_runs = pass_runs[:max_per_side]
+            if len(fail_runs) > max_per_side:
+                fail_runs = fail_runs[:max_per_side]
+
+            pairs = extract_pairwise_preferences(
+                pass_runs + fail_runs, tid,
+            )
+
+            # Deduplicate by (task_id, divergence_column) — keep first
+            seen_cols: set[int] = set()
+            task_exported = 0
+
+            for pair in pairs:
+                if task_exported >= max_pairs_per_task:
+                    break
+
+                # Skip late-trajectory divergences
+                if pair.divergence_position_norm > max_position:
+                    skipped_position += 1
+                    continue
+
+                # Deduplicate within task
+                if pair.divergence_column in seen_cols:
+                    skipped_dedup += 1
+                    continue
+
+                dpo = format_pair_as_dpo(pair)
+
+                # Filter: both sides need substantive content
+                if len(dpo["chosen"]) < min_content or len(dpo["rejected"]) < min_content:
+                    skipped_content += 1
+                    continue
+
+                seen_cols.add(pair.divergence_column)
+                fh.write(json.dumps(dpo) + "\n")
+                total_pairs += 1
+                task_exported += 1
+                if "Thinking:" in dpo["chosen"] or "Thinking:" in dpo["rejected"]:
+                    total_with_reasoning += 1
+
+    console.print(
+        f"\n[green]Exported {total_pairs} DPO pairs to {output}[/green]\n"
+        f"  {total_with_reasoning} pairs with reasoning content "
+        f"({total_with_reasoning * 100 // max(total_pairs, 1)}%)\n"
+        f"  from {len(mixed)} tasks\n"
+        f"  skipped: {skipped_position} late-trajectory, "
+        f"{skipped_content} low-content, {skipped_dedup} duplicates"
+    )
+
+
+@app.command()
+def divergences(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    min_runs: int = typer.Option(4, "--min-runs", help="Min runs per task (need pass+fail)"),
+    n_clusters: int | None = typer.Option(None, "--n-clusters", help="Number of clusters (auto if omitted)"),
+    max_pairs: int = typer.Option(5000, "--max-pairs", help="Cap on pairs for clustering performance"),
+    method: str = typer.Option("tfidf", "--method", help="Clustering method: tfidf or embedding"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="JSON output path"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    model: str | None = typer.Option(None, help="Filter by model"),
+    harness: str | None = typer.Option(None, help="Filter by harness"),
+    task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
+) -> None:
+    """Cluster divergence points across tasks to find recurring failure modes."""
+    runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
+
+    from collections import defaultdict
+    from moirai.analyze.dpo import extract_pairwise_preferences
+    from moirai.analyze.divergence_clusters import cluster_divergences
+
+    # Group by task, keep only tasks with mixed outcomes and enough runs
+    tasks: dict[str, list] = defaultdict(list)
+    for r in runs:
+        if r.result.success is not None:
+            tasks[r.task_id].append(r)
+
+    mixed_tasks = {
+        tid: trs for tid, trs in tasks.items()
+        if (any(r.result.success for r in trs)
+            and any(not r.result.success for r in trs)
+            and len(trs) >= min_runs)
+    }
+
+    if not mixed_tasks:
+        err_console.print("[red]error:[/red] no tasks with mixed outcomes and enough runs")
+        raise typer.Exit(1)
+
+    # Extract pairwise preference pairs across all tasks
+    console.print(f"[bold]Extracting divergence pairs from {len(mixed_tasks)} tasks...[/bold]")
+    all_pairs = []
+    for tid in sorted(mixed_tasks):
+        task_runs = mixed_tasks[tid]
+        pairs = extract_pairwise_preferences(task_runs, tid)
+        all_pairs.extend(pairs)
+
+    if not all_pairs:
+        err_console.print("[red]error:[/red] no divergence pairs extracted")
+        raise typer.Exit(1)
+
+    console.print(f"  {len(all_pairs):,} pairs from {len(mixed_tasks):,} tasks")
+
+    # Cluster
+    console.print("[bold]Clustering...[/bold]")
+    clusters = cluster_divergences(
+        all_pairs,
+        n_clusters=n_clusters,
+        max_pairs=max_pairs,
+        method=method,
+    )
+
+    if not clusters:
+        err_console.print("[yellow]No clusters found (all below min size).[/yellow]")
+        raise typer.Exit(0)
+
+    # Terminal output
+    from rich.table import Table
+
+    total_clustered = sum(c.size for c in clusters)
+    console.print(
+        f"\n[bold]Divergence clusters[/bold] — "
+        f"{len(mixed_tasks):,} tasks, {len(all_pairs):,} pairs\n"
+    )
+
+    table = Table(show_header=True, header_style="bold", pad_edge=False)
+    table.add_column("Cluster", min_width=30)
+    table.add_column("Size", justify="right")
+    table.add_column("%", justify="right")
+    table.add_column("Position", justify="right")
+
+    for c in clusters:
+        pct = c.size / total_clustered * 100 if total_clustered else 0
+        table.add_row(
+            c.label,
+            str(c.size),
+            f"{pct:.0f}%",
+            f"{c.mean_position:.2f}",
+        )
+
+    console.print(table)
+
+    # JSON output
+    if output:
+        import json
+
+        envelope = {
+            "n_pairs": len(all_pairs),
+            "n_tasks": len(mixed_tasks),
+            "clusters": [
+                {
+                    "cluster_id": c.cluster_id,
+                    "label": c.label,
+                    "size": c.size,
+                    "percentage": round(c.size / total_clustered * 100, 1) if total_clustered else 0,
+                    "mean_position": round(c.mean_position, 3),
+                    "action_summary": c.action_summary,
+                    "n_tasks": len(c.task_ids),
+                    "preferred_labels": c.preferred_labels,
+                    "dispreferred_labels": c.dispreferred_labels,
+                }
+                for c in clusters
+            ],
+        }
+        with open(output, "w") as f:
+            json.dump(envelope, f, indent=2)
+        console.print(f"\n[green]JSON written to {output}[/green]")
+
+
+@app.command()
+def features(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    min_runs: int = typer.Option(10, "--min-runs", help="Min runs per task to include"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="JSON output path"),
+    seed: int = typer.Option(42, "--seed", help="Random seed for split-half validation"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    model: str | None = typer.Option(None, help="Filter by model"),
+    harness: str | None = typer.Option(None, help="Filter by harness"),
+    task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
+) -> None:
+    """Compute behavioral features and rank by predictive power.
+
+    Runs within-task natural experiments (median-split + sign test) for each
+    behavioral feature, validates with split-half, and reports ranked results.
+    """
+    runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
+
+    from moirai.analyze.features import rank_features
+    from moirai.viz.terminal import print_features
+
+    results = rank_features(runs, min_runs=min_runs, seed=seed)
+
+    if not results:
+        err_console.print("[yellow]No mixed-outcome tasks found with enough runs.[/yellow]")
+        raise typer.Exit(2)
+
+    print_features(results, runs)
+
+    if output:
+        import json
+
+        n_total_tasks = len({r.task_id for r in runs})
+        n_mixed = results[0].n_tasks if results else 0
+        envelope = {
+            "dataset": str(path),
+            "n_runs": len(runs),
+            "n_tasks_mixed": n_mixed,
+            "n_tasks_total": n_total_tasks,
+            "features": [
+                {
+                    "name": r.name,
+                    "description": r.description,
+                    "direction": r.direction,
+                    "delta_pp": round(r.delta_pp, 2),
+                    "p_value": r.p_value,
+                    "q_value": r.q_value,
+                    "split_half": r.split_half,
+                    "pass_mean": round(r.pass_mean, 4),
+                    "fail_mean": round(r.fail_mean, 4),
+                    "n_tasks": r.n_tasks,
+                    "n_runs": r.n_runs,
+                }
+                for r in results
+            ],
+        }
+        with open(output, "w") as f:
+            json.dump(envelope, f, indent=2)
+        console.print(f"\n[green]JSON written to {output}[/green]")

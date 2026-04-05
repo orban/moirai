@@ -5,9 +5,10 @@ import math
 from moirai.analyze.stats import (
     benjamini_hochberg,
     chi_squared_test,
+    fishers_exact_2x2,
     fishers_exact_branches,
 )
-from moirai.schema import Alignment, DivergencePoint, GAP, Run
+from moirai.schema import ActivityDivergence, Alignment, DivergencePoint, GAP, Run
 
 
 def find_divergence_points(
@@ -94,6 +95,94 @@ def find_divergence_points(
     points.sort(key=lambda dp: (dp.q_value if dp.q_value is not None else 1.0, -dp.entropy))
 
     return points, n_tested
+
+
+def find_activity_divergences(
+    alignment: Alignment,
+    runs: list[Run],
+    q_threshold: float = 1.0,
+) -> list[ActivityDivergence]:
+    """Find columns where having a step (vs gap) predicts outcome.
+
+    For each alignment column, builds a 2x2 table:
+        (active/gap) x (pass/fail)
+    and runs Fisher's exact test. BH correction is applied across all columns.
+
+    Complements ``find_divergence_points`` which tests whether different
+    step *types* predict outcome. This function tests whether *being active
+    at all* predicts outcome — useful when the key signal is that one group
+    skips a step entirely.
+
+    Returns all columns sorted by q-value ascending. Use ``q_threshold``
+    to filter (default 1.0 = return everything, let caller decide).
+    """
+    if not alignment.matrix or not alignment.matrix[0]:
+        return []
+
+    success_map = {r.run_id: r.result.success for r in runs}
+    n_cols = len(alignment.matrix[0])
+    n_runs = len(alignment.run_ids)
+
+    # Partition run indices by outcome
+    pass_idxs = [i for i, rid in enumerate(alignment.run_ids)
+                 if success_map.get(rid) is True]
+    fail_idxs = [i for i, rid in enumerate(alignment.run_ids)
+                 if success_map.get(rid) is False]
+
+    if not pass_idxs or not fail_idxs:
+        return []
+
+    candidates: list[ActivityDivergence] = []
+
+    for col in range(n_cols):
+        pa = sum(1 for i in pass_idxs if alignment.matrix[i][col] != GAP)
+        pg = len(pass_idxs) - pa
+        fa = sum(1 for i in fail_idxs if alignment.matrix[i][col] != GAP)
+        fg = len(fail_idxs) - fa
+
+        # Skip columns where everyone is active or everyone is a gap
+        if (pa + fa == 0) or (pg + fg == 0):
+            continue
+
+        p = fishers_exact_2x2(pa, pg, fa, fg)
+        if p is None:
+            continue
+
+        # Direction: positive = pass runs more active here
+        pass_rate = pa / len(pass_idxs) if pass_idxs else 0
+        fail_rate = fa / len(fail_idxs) if fail_idxs else 0
+
+        # Collect step labels at this column
+        labels: dict[str, int] = {}
+        for i in range(n_runs):
+            val = alignment.matrix[i][col]
+            if val != GAP:
+                labels[val] = labels.get(val, 0) + 1
+
+        phase_ctx = _compute_phase_context(col, alignment, runs)
+
+        candidates.append(ActivityDivergence(
+            column=col,
+            pass_active=pa,
+            pass_gap=pg,
+            fail_active=fa,
+            fail_gap=fg,
+            p_value=p,
+            direction=pass_rate - fail_rate,
+            active_labels=labels,
+            phase_context=phase_ctx,
+        ))
+
+    # BH correction
+    raw_p = [c.p_value for c in candidates]
+    adjusted = benjamini_hochberg(raw_p)
+    for c, qv in zip(candidates, adjusted):
+        c.q_value = qv
+
+    result = [c for c in candidates if c.q_value is not None and c.q_value <= q_threshold]
+    result.sort(key=lambda c: (c.q_value if c.q_value is not None else 1.0, -abs(c.direction)))
+
+    return result
 
 
 def _compute_significance(
