@@ -47,11 +47,13 @@ def generate_beeswarm(deltas: list[float]) -> str:
     mean_delta = sum(deltas) / n if n else 0
 
     W = 700
-    H = 280
+    H = 380
     margin_x = 80
     axis_w = W - 2 * margin_x
-    axis_y = 140  # vertical center of the dot field
+    axis_y = 190  # vertical center of the dot field
     dot_r = 3.0
+    dot_y_min = 60   # don't overflow into title
+    dot_y_max = 320  # don't overflow into summary
 
     # Axis range: symmetric around 0, clamped to [-0.6, 0.6]
     x_max = 0.6
@@ -67,12 +69,14 @@ def generate_beeswarm(deltas: list[float]) -> str:
 
     for delta in sorted_deltas:
         dx = x_pos(delta)
-        # Find a y position that doesn't overlap
+        # Find a y position that doesn't overlap, clamped to bounds
         dy = axis_y
         placed = False
-        for offset in range(50):
+        for offset in range(80):
             for sign in [1, -1] if offset > 0 else [1]:
                 candidate_y = axis_y + sign * offset * (dot_r * 2.2)
+                if candidate_y < dot_y_min or candidate_y > dot_y_max:
+                    continue
                 overlap = False
                 for px, py, _ in dot_positions:
                     dist = math.sqrt((dx - px) ** 2 + (candidate_y - py) ** 2)
@@ -85,6 +89,9 @@ def generate_beeswarm(deltas: list[float]) -> str:
                     break
             if placed:
                 break
+        # If still not placed, skip this dot rather than overflow
+        if not placed:
+            continue
         dot_positions.append((dx, dy, delta))
 
     lines = []
