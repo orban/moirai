@@ -17,7 +17,7 @@ from moirai.analyze.content import select_task_groups
 from moirai.analyze.features import per_task_deltas, _test_position_centroid
 from blog_design import (
     BG, TEXT, TEXT_MID, TEXT_MUTED, NEUTRAL_DOT, BORDER, SURFACE,
-    FONT_BODY, svg_header, title_block,
+    PASS_COLOR, FAIL_COLOR, FONT_BODY, svg_header, title_block,
 )
 
 
@@ -47,7 +47,7 @@ def generate_beeswarm(deltas: list[float]) -> str:
     mean_delta = sum(deltas) / n if n else 0
 
     W = 700
-    H = 380
+    H = 420
     margin_x = 80
     axis_w = W - 2 * margin_x
     axis_y = 190  # vertical center of the dot field
@@ -95,49 +95,65 @@ def generate_beeswarm(deltas: list[float]) -> str:
         dot_positions.append((dx, dy, delta))
 
     lines = []
-    lines.append(svg_header(W, H, min_height=160))
+    lines.append(svg_header(W, H, min_height=250))
 
     # Title
     lines.append(title_block(
         W / 2,
         'Is this just one task?',
-        f'Each dot is one of {n:,} tasks.'
-        ' Right of zero = later testing predicts success on that task.',
+        f'Each dot is one of {n:,} tasks. Right of zero = later testing predicts success.',
         y1=20, y2=38,
     ))
 
-    # Axis line
-    axis_line_y = axis_y + 45
+    zero_x = x_pos(0)
+
+    # Background split: subtle tint left (early helps) and right (late helps)
+    dot_top = dot_y_min - 5
+    dot_bot = dot_y_max + 5
+    lines.append(f'  <rect x="{margin_x}" y="{dot_top}" width="{zero_x - margin_x}"'
+                 f' height="{dot_bot - dot_top}" fill="{FAIL_COLOR}" opacity="0.04" rx="4"/>')
+    lines.append(f'  <rect x="{zero_x}" y="{dot_top}" width="{W - margin_x - zero_x}"'
+                 f' height="{dot_bot - dot_top}" fill="{PASS_COLOR}" opacity="0.04" rx="4"/>')
+
+    # Zero line (through the dot field)
+    lines.append(f'  <line x1="{zero_x}" y1="{dot_top}" x2="{zero_x}"'
+                 f' y2="{dot_bot}" stroke="{BORDER}" stroke-width="1"'
+                 f' stroke-dasharray="4,3"/>')
+
+    # Count annotations at top of each half
+    lines.append(f'  <text x="{(margin_x + zero_x) / 2}" y="{dot_top + 14}"'
+                 f' text-anchor="middle" font-size="12" font-weight="600"'
+                 f' fill="{FAIL_COLOR}" opacity="0.6">{n_neg} tasks</text>')
+    lines.append(f'  <text x="{(zero_x + W - margin_x) / 2}" y="{dot_top + 14}"'
+                 f' text-anchor="middle" font-size="12" font-weight="600"'
+                 f' fill="{PASS_COLOR}" opacity="0.6">{n_pos} tasks</text>')
+
+    # Dots
+    for dx, dy, delta in dot_positions:
+        lines.append(f'  <circle cx="{dx:.1f}" cy="{dy:.1f}" r="{dot_r}"'
+                     f' fill="{NEUTRAL_DOT}" opacity="0.45"/>')
+
+    # Axis — BELOW all dots with clear gap
+    axis_line_y = dot_bot + 16
     lines.append(f'  <line x1="{margin_x}" y1="{axis_line_y}" x2="{W - margin_x}"'
                  f' y2="{axis_line_y}" stroke="{BORDER}" stroke-width="1"/>')
 
-    # Zero line (dashed, through the dots)
-    zero_x = x_pos(0)
-    lines.append(f'  <line x1="{zero_x}" y1="{axis_y - 40}" x2="{zero_x}"'
-                 f' y2="{axis_line_y}" stroke="{BORDER}" stroke-width="1"'
-                 f' stroke-dasharray="3,3"/>')
-
-    # Axis ticks
+    # Ticks
     for tick in [-0.4, -0.2, 0, 0.2, 0.4]:
         tx = x_pos(tick)
         sign = "+" if tick > 0 else ""
         lines.append(f'  <line x1="{tx}" y1="{axis_line_y - 3}" x2="{tx}"'
                      f' y2="{axis_line_y + 3}" stroke="{BORDER}" stroke-width="1"/>')
-        lines.append(f'  <text x="{tx}" y="{axis_line_y + 16}" text-anchor="middle"'
+        lines.append(f'  <text x="{tx}" y="{axis_line_y + 14}" text-anchor="middle"'
                      f' font-size="9" fill="{TEXT_MUTED}">{sign}{tick:.1f}</text>')
 
-    # Axis labels
-    lines.append(f'  <text x="{margin_x}" y="{axis_line_y + 16}" text-anchor="start"'
-                 f' font-size="9" fill="{TEXT_MUTED}">\u2190 early testing helps</text>')
-    lines.append(f'  <text x="{W - margin_x}" y="{axis_line_y + 16}" text-anchor="end"'
-                 f' font-size="9" fill="{TEXT_MUTED}">late testing helps \u2192</text>')
+    # Direction labels below axis
+    lines.append(f'  <text x="{margin_x}" y="{axis_line_y + 28}" text-anchor="start"'
+                 f' font-size="10" fill="{TEXT_MUTED}">\u2190 early testing helps</text>')
+    lines.append(f'  <text x="{W - margin_x}" y="{axis_line_y + 28}" text-anchor="end"'
+                 f' font-size="10" fill="{TEXT_MUTED}">late testing helps \u2192</text>')
 
-    # Dots — single color, let distribution shape tell the story
-    for dx, dy, delta in dot_positions:
-        lines.append(f'  <circle cx="{dx:.1f}" cy="{dy:.1f}" r="{dot_r}"'
-                     f' fill="{NEUTRAL_DOT}" opacity="0.45"/>')
-
-    # Mean marker
+    # Mean marker on axis
     mean_x = x_pos(mean_delta)
     lines.append(f'  <line x1="{mean_x}" y1="{axis_line_y - 6}" x2="{mean_x}"'
                  f' y2="{axis_line_y + 6}" stroke="{TEXT}" stroke-width="2"/>')
