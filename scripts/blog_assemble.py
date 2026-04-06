@@ -149,6 +149,8 @@ On this task, the mechanism is visible: runs that happen to test early get resul
 
 ## From observation to training signal
 
+Every agent eval produces trajectories. Most of the time, those trajectories get a pass/fail label and get thrown away. But when the same agent passes and fails on the same task, the difference between those trajectories is a training signal — a specific moment where a different choice would have led to a different outcome.
+
 The features are predictive, not causal. But they don't have to be causal to be useful — they just have to point at the right moments.
 
 At every divergence point, moirai extracts a preference pair: the context both runs shared, the step the pass run took (chosen), and the step the fail run took (rejected). That's the input format for [Direct Preference Optimization](https://arxiv.org/abs/2305.18290).
