@@ -147,16 +147,41 @@ On this task, the mechanism is visible: runs that happen to test early get resul
 
 ---
 
-## What's next
+## From observation to training signal
 
-The features are predictive, not causal. An intervention study — nudging the agent's behavior in real time and measuring the effect — would test whether acting on these patterns actually improves outcomes. We've designed the study but haven't run it yet.
+The features are predictive, not causal. But they don't have to be causal to be useful — they just have to point at the right moments.
 
-The methodology and code are open source: [github.com/orban/moirai](https://github.com/orban/moirai). The data is from [nebius/SWE-rebench-openhands-trajectories](https://huggingface.co/datasets/nebius/SWE-rebench-openhands-trajectories) on HuggingFace (CC-BY-4.0). To reproduce these findings:
+At every divergence point, moirai extracts a preference pair: the context both runs shared, the step the pass run took (chosen), and the step the fail run took (rejected). That's the input format for [Direct Preference Optimization](https://arxiv.org/abs/2305.18290).
+
+```bash
+moirai export --format dpo examples/swe_rebench --output pairs.jsonl
+# → 11,006 preference pairs from 1,096 tasks
+```
+
+Each pair captures a specific moment where stochastic variation determined the outcome. The pass run searched deeper, or tested later, or avoided hedging — and that choice cascaded into success. The fail run did the opposite.
+
+The behavioral features serve a second purpose: process reward signals. Instead of the sparse pass/fail reward at the end of a trajectory, the features provide dense, step-level signal. An agent with a test centroid of 0.3 at step 20 is on a path that predicts failure — that's a reward shaping signal you can act on before the trajectory finishes.
+
+The pipeline is:
+1. Run your agent many times (stochastic variation generates diverse trajectories for free)
+2. `moirai features` identifies which behaviors predict success
+3. `moirai divergences` finds the decision points where outcomes split
+4. `moirai export --format dpo` extracts preference pairs at those points
+5. Fine-tune on the pairs, or build a process reward model from the features
+
+We haven't closed the loop yet — the DPO fine-tuning and reward model training are next. But the extraction pipeline is working, the data is there (11,006 pairs with reasoning content on both sides), and the behavioral features provide the process-level signal that outcome-only rewards miss.
+
+---
+
+## Reproduce this
+
+The methodology and code are open source: [github.com/orban/moirai](https://github.com/orban/moirai). The data is from [nebius/SWE-rebench-openhands-trajectories](https://huggingface.co/datasets/nebius/SWE-rebench-openhands-trajectories) on HuggingFace (CC-BY-4.0).
 
 ```bash
 pip install -e .
 python scripts/convert_swe_rebench.py /path/to/downloaded/trajectories examples/swe_rebench
 moirai features examples/swe_rebench --min-runs 4 --output results.json
+moirai export --format dpo examples/swe_rebench --output pairs.jsonl
 ```
 
 ---
