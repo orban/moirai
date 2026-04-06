@@ -91,7 +91,7 @@ def generate_panel(selected_runs: list[Run]) -> str:
     align_top = 55
     cell_h = 16
     cell_gap = 3
-    border_w = 3
+    border_w = 6
     align_h = n_runs * (cell_h + cell_gap)
 
     # Section 2: dot strip
