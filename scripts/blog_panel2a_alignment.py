@@ -82,8 +82,9 @@ def generate_panel(selected_runs: list[Run]) -> str:
     # ── Layout ─────────────────────────────────────────────────────────
     W = 700
     margin_x = 14
-    label_w = 10
-    bar_x = margin_x + label_w
+    gradient_w = 10   # wide gradient strip on left
+    gradient_gap = 4  # clear gap between gradient and alignment
+    bar_x = margin_x + gradient_w + gradient_gap
     bar_area_w = W - bar_x - margin_x
     cell_w = bar_area_w / n_cols
 
@@ -91,7 +92,6 @@ def generate_panel(selected_runs: list[Run]) -> str:
     align_top = 55
     cell_h = 16
     cell_gap = 3
-    border_w = 6
     align_h = n_runs * (cell_h + cell_gap)
 
     # Section 2: dot strip
@@ -117,14 +117,14 @@ def generate_panel(selected_runs: list[Run]) -> str:
         y = align_top + row_idx * (cell_h + cell_gap)
         c = centroids[i] or 0
 
-        # Border encodes centroid position (continuous gradient, not binary outcome)
-        # Low centroid (early testing) = orange/red, high centroid = teal/green
+        # Gradient strip encodes centroid position (continuous, not binary outcome)
+        # Low centroid (early testing) = warm red, high centroid = cool green
         r_val = int(200 - 150 * c)
         g_val = int(80 + 100 * c)
         b_val = int(60 + 60 * c)
         bc = f"rgb({r_val},{g_val},{b_val})"
-        lines.append(f'  <rect x="{bar_x - border_w - 1}" y="{y}"'
-                     f' width="{border_w}" height="{cell_h}" fill="{bc}" rx="1"/>')
+        lines.append(f'  <rect x="{margin_x}" y="{y}"'
+                     f' width="{gradient_w}" height="{cell_h}" fill="{bc}" rx="2"/>')
 
         # Step cells
         for col in range(n_cols):
