@@ -36,13 +36,13 @@ description: "Same agent, same task, different outcomes. Here's what the variati
 INTRO = """\
 This is a sequel to [Stop Testing AI Agents Like Deterministic Code](/posts/stop-testing-agents-like-deterministic-code/). That post argued you should treat agents as stochastic processes (same inputs, probabilistic outputs). This one shows what you find when you do.
 
-The setup: one agent ([OpenHands](https://github.com/All-Hands-AI/OpenHands) v0.54.0 running Qwen3-Coder-480B) attempts 1,096 software engineering tasks from [SWE-rebench](https://github.com/nebius/swe-rebench), each 4 to 33 times (median 11). Same code, same prompt, same environment. 12,854 runs total. Every one of these tasks has mixed outcomes — the same agent sometimes succeeds and sometimes doesn't.
+The setup: one agent ([OpenHands](https://github.com/All-Hands-AI/OpenHands) running Qwen3-Coder-480B) attempts 1,096 software engineering tasks from [SWE-rebench](https://github.com/nebius/swe-rebench), each 4 to 33 times (median 11). Same code, same prompt, same environment. 12,854 runs total. Every one of these tasks has mixed outcomes — the same agent sometimes succeeds and sometimes doesn't.
 
 ---
 
 ## Same task, different outcomes
 
-Pick one task. [vyper #4385](https://github.com/vyperlang/vyper/issues/4385): a compiler bug fix. The agent tries it 10 times. Five pass, five fail.
+Pick one task. [vyper #4385](https://github.com/vyperlang/vyper/issues/4385). The agent tries it 10 times. Five pass, five fail.
 
 What does each attempt look like? We classify each step the agent takes — reading files, searching code, editing, running tests, reasoning — and get a *trajectory*: the sequence of actions it took to attempt the fix.
 
@@ -50,7 +50,7 @@ What does each attempt look like? We classify each step the agent takes — read
 
 AFTER_TRAJECTORIES = """\
 
-Each bar is one run. Five pass (green border), five fail (red). They all start similarly: read the repo, search for relevant code, run existing tests. Then they diverge. But comparing the raw trajectories doesn't reveal much — the differences are subtle and the sequences are different lengths.
+Each bar is one run. Five pass (green border), five fail (red). They all start similarly: read the repo, run setup commands, explore the codebase. Then they diverge. But comparing the raw trajectories doesn't reveal much — the differences are subtle and the sequences are different lengths.
 
 We need a way to compare them.
 
@@ -108,7 +108,7 @@ AFTER_FEATURES = """\
 
 Uncertainty and struggle markers are the strongest signal: runs where the agent hedges or backtracks ("maybe," "might," "let me try," "another approach") fail 7 percentage points more often. This likely reflects a confused agent rather than hedging language causing failure — but it's detectable either way. Trajectory shape is second: runs that follow a clean explore-then-modify-then-verify arc pass 6.6pp more often. Test timing is close behind at +6.5pp. Hypothesis formation predicts failure — the agent that says "I think the issue might be..." performs worse than the one that just searches until it finds the answer.
 
-These are within-task effects from stochastic variation. The agent doesn't choose to test early or hedge — it's random. But the random choice predicts the outcome.
+These are within-task effects from stochastic variation. An early random choice — which file to read first, which search to run — cascades into different downstream behaviors. The initial divergence is stochastic; the features capture where the cascade leads.
 
 ---
 
@@ -151,11 +151,11 @@ On this task, the mechanism is visible: runs that happen to test early get resul
 
 The features are predictive, not causal. An intervention study — nudging the agent's behavior in real time and measuring the effect — would test whether acting on these patterns actually improves outcomes. We've designed the study but haven't run it yet.
 
-The methodology and code are open source: [github.com/orban/moirai](https://github.com/orban/moirai). To reproduce these findings:
+The methodology and code are open source: [github.com/orban/moirai](https://github.com/orban/moirai). The data is from [nebius/SWE-rebench-openhands-trajectories](https://huggingface.co/datasets/nebius/SWE-rebench-openhands-trajectories) on HuggingFace (CC-BY-4.0). To reproduce these findings:
 
 ```bash
 pip install -e .
-python scripts/convert_swe_rebench.py /path/to/trajectories examples/swe_rebench
+python scripts/convert_swe_rebench.py /path/to/downloaded/trajectories examples/swe_rebench
 moirai features examples/swe_rebench --min-runs 4 --output results.json
 ```
 
