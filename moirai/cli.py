@@ -1165,3 +1165,301 @@ def features(
         with open(output, "w") as f:
             json.dump(envelope, f, indent=2)
         console.print(f"\n[green]JSON written to {output}[/green]")
+
+
+@app.command()
+def holdout(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    min_runs: int = typer.Option(6, "--min-runs", help="Min runs per task (need train+test splits)"),
+    train_frac: float = typer.Option(0.7, "--train-frac", help="Fraction of runs for training"),
+    top_k: int = typer.Option(10, "--top-k", help="Top K divergence points for scoring"),
+    seed: int = typer.Option(42, "--seed", help="Random seed"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="JSON output path"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    model: str | None = typer.Option(None, help="Filter by model"),
+    harness: str | None = typer.Option(None, help="Filter by harness"),
+    task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
+) -> None:
+    """Held-out prediction study — test whether divergence points predict outcomes on unseen runs."""
+    runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
+
+    from moirai.analyze.content import select_task_groups
+    from moirai.analyze.holdout import run_holdout_study
+    from moirai.viz.terminal import print_holdout_results
+
+    task_groups, skip = select_task_groups(runs, min_runs=min_runs)
+    if not task_groups:
+        err_console.print("[yellow]No mixed-outcome tasks found with enough runs.[/yellow]")
+        raise typer.Exit(2)
+
+    console.print(f"Running held-out study on {len(task_groups)} tasks...")
+    results = run_holdout_study(
+        task_groups, train_frac=train_frac, seed=seed,
+        min_runs=min_runs, top_k_divergence=top_k,
+    )
+
+    print_holdout_results(results)
+
+    if output:
+        import json
+
+        envelope = {
+            "dataset": str(path),
+            "n_tasks": results.n_tasks,
+            "n_train_runs": results.n_train_runs,
+            "n_test_runs": results.n_test_runs,
+            "methods": [
+                {
+                    "name": r.name,
+                    "auroc": round(r.auroc, 4),
+                    "accuracy_at_3": round(r.accuracy_at_3, 4) if r.accuracy_at_3 is not None else None,
+                    "n_scored": r.n_scored,
+                }
+                for r in results.method_results
+            ],
+        }
+        with open(output, "w") as f:
+            json.dump(envelope, f, indent=2)
+        console.print(f"\n[green]JSON written to {output}[/green]")
+
+
+@app.command()
+def rerank(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    k: int = typer.Option(3, "--k", help="Number of runs to sample per task"),
+    n_samples: int = typer.Option(1000, "--n-samples", help="Sampling iterations per task"),
+    min_runs: int = typer.Option(4, "--min-runs", help="Min runs per task"),
+    seed: int = typer.Option(42, "--seed", help="Random seed"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="JSON output path"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    model: str | None = typer.Option(None, help="Filter by model"),
+    harness: str | None = typer.Option(None, help="Filter by harness"),
+    task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
+) -> None:
+    """Reranking experiment — test whether moirai-derived scoring improves best-of-K selection."""
+    runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
+
+    from moirai.analyze.content import select_task_groups
+    from moirai.analyze.rerank import rerank_experiment
+    from moirai.viz.terminal import print_rerank_results
+
+    task_groups, skip = select_task_groups(runs, min_runs=min_runs)
+    if not task_groups:
+        err_console.print("[yellow]No mixed-outcome tasks found with enough runs.[/yellow]")
+        raise typer.Exit(2)
+
+    console.print(f"Running reranking experiment on {len(task_groups)} tasks (K={k})...")
+    results = rerank_experiment(
+        task_groups, k=k, n_samples=n_samples, seed=seed, min_runs=min_runs,
+    )
+
+    print_rerank_results(results)
+
+    if output:
+        import json
+
+        envelope = {
+            "dataset": str(path),
+            "k": results.k,
+            "n_tasks": results.n_tasks,
+            "n_samples_per_task": results.n_samples_per_task,
+            "random_pass_at_1": round(results.random_pass_at_1, 4),
+            "random_best_of_k": round(results.random_best_of_k, 4),
+            "oracle_best_of_k": round(results.oracle_best_of_k, 4),
+            "methods": [
+                {
+                    "name": r.name,
+                    "selection_accuracy": round(r.selection_accuracy, 4),
+                    "lift_over_random": round(r.lift_over_random, 4),
+                    "ci_lower": round(r.ci_lower, 4),
+                    "ci_upper": round(r.ci_upper, 4),
+                    "n_samples": r.n_samples,
+                }
+                for r in results.method_results
+            ],
+            "per_task": results.per_task,
+        }
+        with open(output, "w") as f:
+            json.dump(envelope, f, indent=2)
+        console.print(f"\n[green]JSON written to {output}[/green]")
+
+
+@app.command()
+def structure(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    min_runs: int = typer.Option(4, "--min-runs", help="Min runs per task"),
+    top_k: int = typer.Option(5, "--top-k", help="Top K divergence points"),
+    n_resamples: int = typer.Option(20, "--n-resamples", help="Resamples for stability"),
+    rerank_json: Path | None = typer.Option(None, "--rerank-json",
+        help="Rerank results JSON (from moirai rerank --output) for correlation analysis"),
+    seed: int = typer.Option(42, "--seed", help="Random seed"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="JSON output path"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    model: str | None = typer.Option(None, help="Filter by model"),
+    harness: str | None = typer.Option(None, help="Filter by harness"),
+    task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
+) -> None:
+    """Compute per-task structure scores — predict when branch-aware analysis helps."""
+    runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
+
+    from moirai.analyze.content import select_task_groups
+    from moirai.analyze.structure import StructureScore, compute_all_structure_scores
+
+    task_groups, skip = select_task_groups(runs, min_runs=min_runs)
+    if not task_groups:
+        err_console.print("[yellow]No mixed-outcome tasks found with enough runs.[/yellow]")
+        raise typer.Exit(2)
+
+    console.print(f"Computing structure scores for {len(task_groups)} tasks...")
+    scores = compute_all_structure_scores(
+        task_groups, min_runs=min_runs, top_k=top_k,
+        n_resamples=n_resamples, seed=seed,
+    )
+
+    if not scores:
+        err_console.print("[yellow]No tasks produced structure scores.[/yellow]")
+        raise typer.Exit(2)
+
+    # Print summary table
+    console.print(
+        f"\n[bold]Structure scores[/bold] — {len(scores)} tasks\n"
+    )
+    console.print(
+        f"  {'Task':<45s} {'Composite':>9s}  {'Branch':>7s}"
+        f"  {'Early':>7s}  {'Stable':>7s}  {'Runs':>4s}  {'DPs':>3s}"
+    )
+    console.print(
+        f"  {'─' * 45} {'─' * 9}  {'─' * 7}  {'─' * 7}  {'─' * 7}  {'─' * 4}  {'─' * 3}"
+    )
+
+    # Show top 10 and bottom 10
+    if len(scores) > 20:
+        show_list: list[StructureScore | None] = scores[:10] + [None] + scores[-10:]
+    else:
+        show_list = scores
+    for s in show_list:
+        if s is None:
+            console.print(f"  {'...':>45s}")
+            continue
+        tid = s.task_id[:45] if len(s.task_id) <= 45 else s.task_id[:42] + "..."
+        color = "green" if s.composite > 0.4 else "red" if s.composite < 0.2 else "dim"
+        console.print(
+            f"  {tid:<45s} [{color}]{s.composite:>9.3f}[/{color}]"
+            f"  {s.branch_gap:>7.3f}  {s.earlyness:>7.3f}"
+            f"  {s.stability:>7.3f}  {s.n_runs:>4d}  {s.n_divergence_points:>3d}"
+        )
+
+    # Distribution summary
+    composites = [s.composite for s in scores]
+    console.print(
+        f"\n  Median: {sorted(composites)[len(composites)//2]:.3f}"
+        f"  Mean: {sum(composites)/len(composites):.3f}"
+        f"  Min: {min(composites):.3f}  Max: {max(composites):.3f}"
+    )
+
+    # Correlation with reranking results if provided
+    if rerank_json:
+        import json as json_mod
+
+        with open(rerank_json) as f:
+            rerank_data = json_mod.load(f)
+
+        rerank_per_task = rerank_data.get("per_task", {})
+        if not rerank_per_task:
+            err_console.print(
+                "[yellow]Rerank JSON has no per_task data. "
+                "Re-run: moirai rerank ... --output rerank.json[/yellow]"
+            )
+        else:
+            score_map = {s.task_id: s for s in scores}
+
+            pairs: list[tuple[float, float, float, float, str]] = []
+            for tid, methods in rerank_per_task.items():
+                if tid not in score_map:
+                    continue
+                random_acc = methods.get("random", 0.5)
+                div_acc = methods.get("divergence", random_acc)
+                feat_acc = methods.get("features", random_acc)
+                pairs.append((
+                    score_map[tid].composite,
+                    div_acc - random_acc,     # divergence lift
+                    feat_acc - random_acc,    # features lift
+                    div_acc - feat_acc,       # div vs features gap
+                    tid,
+                ))
+
+            if len(pairs) >= 10:
+                from moirai.analyze.stats import kendall_tau_b
+
+                composites_p = [p[0] for p in pairs]
+                div_lifts = [p[1] for p in pairs]
+                div_vs_feats = [p[3] for p in pairs]
+
+                tau_lift, p_lift = kendall_tau_b(composites_p, div_lifts)
+                tau_gap, p_gap = kendall_tau_b(composites_p, div_vs_feats)
+
+                console.print(
+                    f"\n  [bold]Correlation with reranking[/bold]"
+                    f" ({len(pairs)} tasks matched)\n"
+                )
+                p_lift_s = f"{p_lift:.4f}" if p_lift is not None else "—"
+                p_gap_s = f"{p_gap:.4f}" if p_gap is not None else "—"
+                console.print(
+                    f"  Structure vs divergence lift:    tau={tau_lift:+.3f}  p={p_lift_s}"
+                )
+                console.print(
+                    f"  Structure vs (div - features):   tau={tau_gap:+.3f}  p={p_gap_s}"
+                )
+
+                # Regime split: top vs bottom quartile
+                pairs.sort(key=lambda p: p[0])
+                q_size = len(pairs) // 4
+                bottom_q = pairs[:q_size]
+                top_q = pairs[-q_size:]
+
+                if bottom_q and top_q:
+                    b_div = sum(p[1] for p in bottom_q) / len(bottom_q)
+                    t_div = sum(p[1] for p in top_q) / len(top_q)
+                    b_feat = sum(p[2] for p in bottom_q) / len(bottom_q)
+                    t_feat = sum(p[2] for p in top_q) / len(top_q)
+
+                    console.print(
+                        f"\n  [bold]Regime split[/bold]"
+                        f" (Q1 vs Q4 by structure score)\n"
+                    )
+                    console.print(
+                        f"  {'':>25s} {'Low structure':>14s}  {'High structure':>14s}"
+                    )
+                    console.print(f"  {'─' * 25} {'─' * 14}  {'─' * 14}")
+                    console.print(
+                        f"  {'Divergence lift':>25s} {b_div:>+13.1%}  {t_div:>+13.1%}"
+                    )
+                    console.print(
+                        f"  {'Features lift':>25s} {b_feat:>+13.1%}  {t_feat:>+13.1%}"
+                    )
+                    console.print(
+                        f"  {'Tasks':>25s} {len(bottom_q):>14d}  {len(top_q):>14d}"
+                    )
+
+    if output:
+        import json as json_mod
+
+        envelope = {
+            "dataset": str(path),
+            "n_tasks": len(scores),
+            "scores": [
+                {
+                    "task_id": s.task_id,
+                    "composite": round(s.composite, 4),
+                    "branch_gap": round(s.branch_gap, 4),
+                    "earlyness": round(s.earlyness, 4),
+                    "stability": round(s.stability, 4),
+                    "n_runs": s.n_runs,
+                    "n_divergence_points": s.n_divergence_points,
+                }
+                for s in scores
+            ],
+        }
+        with open(output, "w") as f:
+            json_mod.dump(envelope, f, indent=2)
+        console.print(f"\n[green]JSON written to {output}[/green]")
