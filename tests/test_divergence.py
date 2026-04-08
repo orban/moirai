@@ -1,7 +1,7 @@
 """Tests for divergence detection."""
 
 from moirai.schema import Alignment, GAP, Step, Result, Run
-from moirai.analyze.divergence import find_activity_divergences, find_divergence_points
+from moirai.analyze.divergence import find_activity_divergences, find_divergence_points, generate_claim, summarize_point
 from moirai.analyze.align import align_runs
 
 
@@ -384,3 +384,185 @@ class TestAlignRunsProgressive:
         a1 = align_runs(runs)
         a2 = align_runs(runs)
         assert a1.matrix == a2.matrix
+
+
+class TestSummarizePoint:
+    def test_generic_with_rates(self):
+        """Two non-GAP variants with rates produces opinionated summary."""
+        from moirai.schema import DivergencePoint
+        point = DivergencePoint(
+            column=5,
+            value_counts={"edit": 4, "search": 3},
+            entropy=1.0,
+            success_by_value={"edit": 0.75, "search": 0.33},
+        )
+        s = summarize_point(point)
+        assert "step 5" in s
+        assert "75%" in s
+        assert "33%" in s
+        assert "success" in s or "correlates" in s
+
+    def test_gap_pattern_active_better(self):
+        """GAP variant where active runs win — takes a stance."""
+        from moirai.schema import DivergencePoint
+        point = DivergencePoint(
+            column=7,
+            value_counts={"read(test)": 5, GAP: 3},
+            entropy=0.95,
+            success_by_value={"read(test)": 0.80, GAP: 0.33},
+        )
+        s = summarize_point(point)
+        assert "80%" in s
+        assert "33%" in s
+        assert "step 7" in s
+
+    def test_gap_pattern_gap_better(self):
+        """GAP variant where skipping is better — says so."""
+        from moirai.schema import DivergencePoint
+        point = DivergencePoint(
+            column=3,
+            value_counts={"bash": 4, GAP: 6},
+            entropy=0.97,
+            success_by_value={"bash": 0.25, GAP: 0.83},
+        )
+        s = summarize_point(point)
+        assert "83%" in s
+        assert "25%" in s
+        assert "kip" in s.lower()  # "Skipping" or "skip"
+
+    def test_no_rates_still_describes_split(self):
+        """No success rates produces a description without percentages."""
+        from moirai.schema import DivergencePoint
+        point = DivergencePoint(
+            column=2,
+            value_counts={"edit": 3, GAP: 2},
+            entropy=0.97,
+            success_by_value={"edit": None, GAP: None},
+        )
+        s = summarize_point(point)
+        assert "step 2" in s
+        assert "edit" in s.lower()
+
+    def test_empty_variants(self):
+        """Empty value_counts produces fallback."""
+        from moirai.schema import DivergencePoint
+        point = DivergencePoint(
+            column=0,
+            value_counts={},
+            entropy=0.0,
+            success_by_value={},
+        )
+        s = summarize_point(point)
+        assert "0" in s
+
+    def test_no_rate_no_percentages(self):
+        """No rates means no percentages in output."""
+        from moirai.schema import DivergencePoint
+        point = DivergencePoint(
+            column=4,
+            value_counts={"read": 3, "write": 2},
+            entropy=0.97,
+            success_by_value={"read": None, "write": None},
+        )
+        s = summarize_point(point)
+        assert "step 4" in s
+        assert "%" not in s
+
+    def test_edit_vs_test_pattern_test_wins(self):
+        """Edit-vs-test pattern where testing first is better."""
+        from moirai.schema import DivergencePoint
+        point = DivergencePoint(
+            column=10,
+            value_counts={"edit(source)": 5, "test(fail)": 4},
+            entropy=1.0,
+            success_by_value={"edit(source)": 0.20, "test(fail)": 0.75},
+        )
+        s = summarize_point(point)
+        assert "75%" in s
+        assert "20%" in s
+        assert "step 10" in s
+
+    def test_edit_vs_test_pattern_edit_wins(self):
+        """Edit-vs-test pattern where editing first is better."""
+        from moirai.schema import DivergencePoint
+        point = DivergencePoint(
+            column=8,
+            value_counts={"write(source)": 6, "test(pass)": 3},
+            entropy=0.92,
+            success_by_value={"write(source)": 0.83, "test(pass)": 0.33},
+        )
+        s = summarize_point(point)
+        assert "83%" in s
+        assert "33%" in s
+        assert "wrote" in s.lower() or "write" in s.lower()
+
+    def test_different_file_targets(self):
+        """Same base action but different targets."""
+        from moirai.schema import DivergencePoint
+        point = DivergencePoint(
+            column=12,
+            value_counts={"read(source)": 5, "read(test_file)": 4},
+            entropy=1.0,
+            success_by_value={"read(source)": 0.40, "read(test_file)": 0.75},
+        )
+        s = summarize_point(point)
+        assert "source" in s
+        assert "test_file" in s
+        assert "75%" in s
+        assert "40%" in s
+
+    def test_different_targets_no_rates_falls_through(self):
+        """Same base action, different targets, but no rates — falls to generic."""
+        from moirai.schema import DivergencePoint
+        point = DivergencePoint(
+            column=6,
+            value_counts={"edit(source)": 3, "edit(config)": 2},
+            entropy=0.97,
+            success_by_value={"edit(source)": None, "edit(config)": None},
+        )
+        s = summarize_point(point)
+        assert "step 6" in s
+        assert "edit" in s.lower()
+
+
+class TestGenerateClaim:
+    def test_claim_picks_strongest_divergence(self):
+        """Claim picks the point with the largest outcome gap."""
+        from moirai.schema import DivergencePoint
+        weak = DivergencePoint(
+            column=3, value_counts={"a": 5, "b": 5}, entropy=1.0,
+            success_by_value={"a": 0.60, "b": 0.40},
+        )
+        strong = DivergencePoint(
+            column=7, value_counts={"x": 4, "y": 6}, entropy=1.0,
+            success_by_value={"x": 1.0, "y": 0.0},
+        )
+        claim = generate_claim([weak, strong], 10)
+        assert claim is not None
+        assert "step 7" in claim
+        assert "100%" in claim
+
+    def test_claim_none_when_no_gap(self):
+        """No claim when all variants have equal rates."""
+        from moirai.schema import DivergencePoint
+        point = DivergencePoint(
+            column=1, value_counts={"a": 5, "b": 5}, entropy=1.0,
+            success_by_value={"a": 0.50, "b": 0.50},
+        )
+        claim = generate_claim([point], 10)
+        assert claim is None
+
+    def test_claim_none_for_empty_points(self):
+        assert generate_claim([], 10) is None
+
+    def test_claim_includes_outcome_gap(self):
+        """Claim states the percentage gap."""
+        from moirai.schema import DivergencePoint
+        point = DivergencePoint(
+            column=5, value_counts={"read": 8, "edit": 4}, entropy=0.9,
+            success_by_value={"read": 0.875, "edit": 0.25},
+        )
+        claim = generate_claim([point], 12)
+        assert claim is not None
+        assert "62%" in claim or "63%" in claim  # 87.5% - 25% = 62.5%
+        assert "gap" in claim.lower()

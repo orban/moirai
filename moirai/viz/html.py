@@ -84,9 +84,11 @@ def write_branch_html(
     html = template.replace('"__DATA_PLACEHOLDER__"', data_json)
 
     # Inject SVGs as hidden divs before </body>, referenced by task id
+    # Skip empty SVGs (lightweight tasks beyond max_detail_tasks)
     svg_divs = "\n".join(
         f'<div id="svg-{key}" style="display:none">{svg}</div>'
         for key, svg in svgs.items()
+        if svg
     )
     html = html.replace("</body>", f"{svg_divs}\n</body>")
 
@@ -94,8 +96,12 @@ def write_branch_html(
     return path
 
 
-def _build_data(runs: list[Run], task_results: list | None, analyze: bool = False) -> dict:
-    """Build the complete data payload for the template."""
+def _build_data(runs: list[Run], task_results: list | None, analyze: bool = False, max_detail_tasks: int = 20) -> dict:
+    """Build the complete data payload for the template.
+
+    Tasks beyond max_detail_tasks get branch cards only (lightweight).
+    Tasks within the limit also get SVG dendrograms + comparison diffs.
+    """
     n_pass = sum(1 for r in runs if r.result.success)
 
     tasks = []
@@ -103,24 +109,50 @@ def _build_data(runs: list[Run], task_results: list | None, analyze: bool = Fals
 
     if task_results:
         from moirai.analyze.splits import find_split_divergences
+        from moirai.analyze.align import consensus as _consensus
+        from moirai.analyze.divergence import build_variant_list, generate_claim, summarize_point
 
-        for tid, task_runs, task_alignment, _task_points in task_results:
+        for task_idx, (tid, task_runs, task_alignment, task_points) in enumerate(task_results):
             if not task_alignment.matrix or not task_alignment.matrix[0]:
                 continue
 
-            splits, Z, dendro = find_split_divergences(task_alignment, task_runs)
-            significant = [s for s in splits if s.separation > 0.3]
-            total_splits += len(significant)
+            # Branch cards for ALL tasks (lightweight)
+            cons = _consensus(task_alignment.matrix)
+            branch_cards = []
+            for i, point in enumerate(task_points[:3], 1):
+                branch_cards.append(_build_branch_card(point, i, build_variant_list, summarize_point, cons))
 
-            task_data = _build_task_data(tid, task_runs, task_alignment, significant, Z, dendro)
+            # Full detail (SVG + comparisons) only for top N tasks
+            if task_idx < max_detail_tasks:
+                splits, Z, dendro = find_split_divergences(task_alignment, task_runs)
+                significant = [s for s in splits if s.separation > 0.3]
+                total_splits += len(significant)
 
-            # LLM analysis
-            if analyze and task_data["comparisons"]:
-                from moirai.analyze.explain import explain_task
-                analysis = _run_llm_analysis(tid, task_runs)
-                if analysis:
-                    task_data["analysis"] = analysis
+                task_data = _build_task_data(tid, task_runs, task_alignment, significant, Z, dendro)
 
+                # LLM analysis
+                if analyze and task_data["comparisons"]:
+                    from moirai.analyze.explain import explain_task
+                    analysis = _run_llm_analysis(tid, task_runs)
+                    if analysis:
+                        task_data["analysis"] = analysis
+            else:
+                # Lightweight task entry — branch cards only
+                n_p = sum(1 for r in task_runs if r.result.success)
+                task_data = {
+                    "id": tid,
+                    "safe_id": tid.replace(" ", "_").replace("/", "_"),
+                    "n_runs": len(task_runs),
+                    "n_pass": n_p,
+                    "n_fail": len(task_runs) - n_p,
+                    "n_cols": len(task_alignment.matrix[0]),
+                    "interpretation": None,
+                    "svg": "",
+                    "comparisons": [],
+                }
+
+            task_data["branch_cards"] = branch_cards
+            task_data["claim"] = generate_claim(task_points, len(task_runs))
             tasks.append(task_data)
 
     patterns = _build_patterns_data(runs)
@@ -205,6 +237,47 @@ def _clustering_interpretation(splits: list, runs: list[Run]) -> dict | None:
     return {
         "text": f"{len(significant)} structural split{'s' if len(significant) != 1 else ''}, none significantly predict outcome.",
         "level": "muted",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Branch card data (from divergence points)
+# ---------------------------------------------------------------------------
+
+def _build_branch_card(point, number: int, variant_fn, summarize_fn, cons: list[str] | None = None) -> dict:
+    """Build data for a branch card from a DivergencePoint."""
+    variants = []
+    for v in variant_fn(point):
+        variants.append({
+            **v,
+            "pass_pct": f"{v['pass_rate']:.0%}" if v["pass_rate"] is not None else "?",
+            "color": STEP_COLORS.get(v["value"], DEFAULT_COLOR),
+        })
+
+    # Context snippet: steps before → [split] → steps after
+    snippet = None
+    if cons is not None:
+        col = point.column
+        before = [c for c in cons[max(0, col - 2):col] if c != GAP]
+        after = [c for c in cons[col + 1:col + 3] if c != GAP]
+        split_vals = sorted(point.value_counts, key=lambda v: -point.value_counts[v])[:2]
+        parts = []
+        if before:
+            parts.append(" → ".join(before))
+        parts.append(f"[{' / '.join(split_vals)}]")
+        if after:
+            parts.append(" → ".join(after))
+        snippet = "... " + " → ".join(parts) + " ..."
+
+    return {
+        "number": number,
+        "position": point.column,
+        "q_value": f"{point.q_value:.3f}" if point.q_value is not None else None,
+        "p_value": f"{point.p_value:.3f}" if point.p_value is not None else None,
+        "summary": summarize_fn(point),
+        "phase_context": point.phase_context,
+        "snippet": snippet,
+        "variants": variants,
     }
 
 

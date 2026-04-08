@@ -365,6 +365,55 @@
         </span>
       </div>
 
+      <!-- CLAIM — the hero sentence, the one thing you read -->
+      <template x-if="task.claim">
+        <div style="padding:16px 24px;background:var(--fail-dim);border-bottom:2px solid var(--fail)">
+          <div style="font-family:var(--display);font-size:14px;font-weight:600;color:var(--fail);line-height:1.6"
+               x-text="task.claim"></div>
+        </div>
+      </template>
+
+      <!-- BRANCH CARDS (supporting evidence) -->
+      <template x-if="task.branch_cards && task.branch_cards.length">
+        <div style="padding:16px 24px;display:flex;flex-direction:column;gap:12px;border-bottom:1px solid var(--border-subtle)">
+          <template x-for="card in task.branch_cards" :key="card.number">
+            <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:14px 18px">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                <span style="font-family:var(--display);font-size:11px;font-weight:700;color:var(--accent);background:var(--accent-dim);padding:2px 8px;border-radius:3px"
+                      x-text="`Branch ${card.number}`"></span>
+                <span x-show="card.q_value" style="font-size:9px;color:var(--text-muted)" x-text="`q=${card.q_value}`"></span>
+              </div>
+              <div style="font-family:var(--display);font-size:12px;color:var(--text-bright);line-height:1.5;margin-bottom:10px;font-style:italic"
+                   x-text="card.summary"></div>
+              <div x-show="card.phase_context" style="font-size:9px;color:var(--text-muted);margin-bottom:4px" x-text="card.phase_context"></div>
+              <div x-show="card.snippet" style="font-size:9px;color:var(--text-muted);margin-bottom:8px;font-family:var(--mono)" x-text="card.snippet"></div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <template x-for="v in card.variants" :key="v.value">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span style="font-size:11px;font-weight:500;min-width:140px" :style="`color:${v.color}`" x-text="v.value"></span>
+                    <span style="font-size:10px;color:var(--text-muted)" x-text="`${v.n_runs} runs`"></span>
+                    <template x-if="v.n_pass !== null">
+                      <span style="font-size:10px">
+                        <span style="color:var(--pass)" x-text="`${v.n_pass}P`"></span>
+                        <span style="color:var(--text-muted)">/</span>
+                        <span style="color:var(--fail)" x-text="`${v.n_fail}F`"></span>
+                      </span>
+                    </template>
+                    <div style="flex:1;max-width:120px;height:4px;background:var(--border);border-radius:2px;overflow:hidden">
+                      <div style="height:100%;border-radius:2px;transition:width 0.3s"
+                           :style="`width:${v.pass_rate !== null ? (v.pass_rate * 100) : 0}%;background:${v.pass_rate !== null && v.pass_rate >= 0.5 ? 'var(--pass)' : 'var(--fail)'}`"></div>
+                    </div>
+                    <span style="font-size:10px;font-weight:500;min-width:32px;text-align:right"
+                          :style="`color:${v.pass_rate !== null && v.pass_rate >= 0.5 ? 'var(--pass)' : 'var(--fail)'}`"
+                          x-text="v.pass_pct"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
+
       <!-- ONE-LINE ANNOTATION (if analysis available) -->
       <template x-if="task.analysis">
         <div style="padding:10px 24px;font-family:var(--display);font-size:13px;color:var(--text-bright);border-bottom:1px solid var(--border-subtle)"

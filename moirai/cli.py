@@ -166,9 +166,14 @@ def branch(
     harness: str | None = typer.Option(None, help="Filter by harness"),
     task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
     task: str | None = typer.Option(None, "--task", help="Filter to a specific task ID"),
+    min_branch_support: int = typer.Option(2, "--min-branch-support", help="Minimum runs per branch variant"),
+    min_outcome_separation: float = typer.Option(0.5, "--min-outcome-separation",
+        help="Maximum q-value for divergence points (lower = stricter)"),
+    max_tasks: int | None = typer.Option(None, "--max-tasks", help="Limit number of tasks to analyze"),
     feature: str | None = typer.Option(None, "--feature",
         help="Annotate runs with a behavioral feature (from moirai features)"),
     html: Path | None = typer.Option(None, help="Write HTML output to path"),
+    json_output: Path | None = typer.Option(None, "--json", help="Write JSON output to path"),
     analyze: bool = typer.Option(False, help="Run LLM analysis on divergence points (requires anthropic SDK)"),
     viewer: Path | None = typer.Option(None, help="Write interactive heatmap viewer HTML"),
 ) -> None:
@@ -177,7 +182,7 @@ def branch(
 
     from collections import defaultdict
     from moirai.analyze.align import consensus, align_runs
-    from moirai.analyze.divergence import find_divergence_points
+    from moirai.analyze.divergence import build_variant_list, find_divergence_points, generate_claim, summarize_point
     from moirai.analyze.stats import kendall_tau_b
 
     # Group by task_id — alignment only makes sense for repeated runs of the same task
@@ -212,13 +217,16 @@ def branch(
             err_console.print(f"[red]Unknown feature '{feature}'. Valid: {', '.join(valid)}[/red]")
             raise typer.Exit(2)
 
-    console.print(f"[bold]{len(mixed_tasks)} tasks with mixed outcomes[/bold] (out of {len(tasks)} total)\n")
+    sorted_tids = sorted(mixed_tasks, key=lambda t: -len(mixed_tasks[t]))
+
+    console.print(f"[bold]{len(sorted_tids)} tasks with mixed outcomes[/bold] (out of {len(tasks)} total)\n")
 
     task_results = []
-    for tid in sorted(mixed_tasks, key=lambda t: -len(mixed_tasks[t])):
+    json_tasks = []  # for --json output
+    for tid in sorted_tids:
         task_runs = mixed_tasks[tid]
         alignment = align_runs(task_runs, level="name")
-        points, _ = find_divergence_points(alignment, task_runs, min_branch_size=1, q_threshold=0.5)
+        points, _ = find_divergence_points(alignment, task_runs, min_branch_size=min_branch_support, q_threshold=min_outcome_separation)
 
         n_pass = sum(1 for r in task_runs if r.result.success)
         n_fail = len(task_runs) - n_pass
@@ -268,15 +276,36 @@ def branch(
 
         if not points:
             console.print("  [dim]No significant divergence points[/dim]\n")
+            if json_output is not None:
+                json_tasks.append({"task_id": tid, "n_runs": len(task_runs),
+                                   "n_pass": n_pass, "n_fail": n_fail,
+                                   "claim": None, "branch_points": []})
             continue
 
-        for point in points[:3]:
-            p_str = f"q={point.q_value:.3f}" if getattr(point, "q_value", None) is not None else (f"p={point.p_value:.3f}" if point.p_value is not None else "")
-            console.print(f"  [bold]Position {point.column}[/bold] ({p_str})")
+        # Auto-generated claim — the hero sentence
+        claim = generate_claim(points, len(task_runs))
+        if claim:
+            console.print(f"\n  [bold red]>>> {claim}[/bold red]\n")
+
+        # Hoist consensus once per task (used by context snippets)
+        cons = consensus(alignment.matrix) if alignment.matrix and alignment.matrix[0] else None
+
+        # Build JSON branch points and print terminal cards
+        json_branch_points = []
+        for i, point in enumerate(points[:3], 1):
+            summary = summarize_point(point)
+            variants = build_variant_list(point)
+
+            # Terminal branch card
+            p_str = f"q={point.q_value:.3f}" if getattr(point, "q_value", None) is not None else (
+                f"p={point.p_value:.3f}" if point.p_value is not None else "")
+            console.print(f"  [bold]━━━ Branch {i} ({p_str}) ━━━[/bold]")
+            console.print(f'  [italic]"{summary}"[/italic]')
             if point.phase_context:
                 console.print(f"  [dim]{point.phase_context}[/dim]")
-            for value, count in sorted(point.value_counts.items(), key=lambda x: -x[1]):
-                rate = point.success_by_value.get(value)
+            console.print()
+            for v in variants:
+                rate = v["pass_rate"]
                 rate_str = f"{rate:.0%}" if rate is not None else "?"
                 if rate is not None and rate >= 0.6:
                     color = "green"
@@ -284,8 +313,86 @@ def branch(
                     color = "red"
                 else:
                     color = "yellow"
-                console.print(f"    [{color}]{value}[/{color}]: {count} runs, {rate_str} success")
-        console.print()
+                if v["n_pass"] is not None:
+                    console.print(f"    [{color}]{v['value']}[/{color}]: {v['n_runs']} runs, {v['n_pass']} pass / {v['n_fail']} fail ({rate_str})")
+                else:
+                    console.print(f"    [{color}]{v['value']}[/{color}]: {v['n_runs']} runs ({rate_str})")
+
+            # Context snippet: 2 steps before/after the split
+            if cons is not None:
+                col = point.column
+                before = [c for c in cons[max(0, col - 2):col] if c != "-"]
+                after = [c for c in cons[col + 1:col + 3] if c != "-"]
+                split_vals = sorted(point.value_counts, key=lambda v: -point.value_counts[v])
+                ctx_parts = []
+                if before:
+                    ctx_parts.append(" → ".join(before))
+                ctx_parts.append(f"[{' / '.join(split_vals[:2])}]")
+                if after:
+                    ctx_parts.append(" → ".join(after))
+                console.print(f"  [dim]Context: ... {' → '.join(ctx_parts)} ...[/dim]")
+            console.print()
+
+            # JSON branch point data
+            if json_output is not None:
+                json_branch_points.append({
+                    "position": point.column,
+                    "q_value": round(point.q_value, 4) if point.q_value is not None else None,
+                    "p_value": round(point.p_value, 4) if point.p_value is not None else None,
+                    "summary": summary,
+                    "phase_context": point.phase_context,
+                    "variants": [
+                        {"value": v["value"], "n_runs": v["n_runs"],
+                         "n_pass": v["n_pass"], "pass_rate": round(v["pass_rate"], 3) if v["pass_rate"] is not None else None}
+                        for v in variants
+                    ],
+                })
+
+        if json_output is not None:
+            json_runs = []
+            for r in task_runs:
+                json_runs.append({
+                    "run_id": r.run_id,
+                    "outcome": "pass" if r.result.success else ("fail" if r.result.success is False else "unknown"),
+                    "n_steps": len(r.steps),
+                })
+            json_tasks.append({
+                "task_id": tid,
+                "n_runs": len(task_runs),
+                "n_pass": n_pass,
+                "n_fail": n_fail,
+                "claim": claim,
+                "runs": json_runs,
+                "branch_points": json_branch_points,
+            })
+
+    # Sort results by interestingness: tasks with claims first (by gap size), then by run count
+    def _claim_sort_key(item):
+        """Tasks with claims rank first (by gap desc), then by run count."""
+        tid, task_runs, alignment, points = item
+        from moirai.analyze.divergence import _best_worst
+        best_gap = 0.0
+        for p in points:
+            bw = _best_worst(p, min_support=3)
+            if bw:
+                best_gap = max(best_gap, bw[1] - bw[4])
+        return (-best_gap, -len(task_runs))
+
+    task_results.sort(key=_claim_sort_key)
+
+    # Apply --max-tasks AFTER sorting by interestingness (limits output, not analysis)
+    if max_tasks is not None:
+        task_results = task_results[:max_tasks]
+        shown_tids = {tid for tid, *_ in task_results}
+        json_tasks = [t for t in json_tasks if t["task_id"] in shown_tids]
+
+    if json_output:
+        import json
+        # Sort json_tasks to match task_results order
+        result_order = {tid: i for i, (tid, *_) in enumerate(task_results)}
+        json_tasks.sort(key=lambda t: result_order.get(t["task_id"], len(result_order)))
+        json_output.write_text(json.dumps({"tasks": json_tasks}, indent=2), encoding="utf-8")
+        console.print(f"\nJSON written to {json_output}")
 
     if html:
         from moirai.viz.html import write_branch_html
