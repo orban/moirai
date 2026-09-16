@@ -35,8 +35,7 @@ examples/swe_agent/
 examples/swe_agent_full/
 examples/swe_smith/
 examples/swe_smith_extra/
-examples/swe_rebench/
-examples/swe_rebench_full/
-examples/swe_rebench_v2/
-examples/swebench_verified/
 examples/real_data_demo/data/
+
+# Note: examples/swe_rebench*, examples/swebench_verified are symlinks into
+# /Volumes/mnemosyne. The links are tracked as provenance; the data is not.
