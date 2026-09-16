@@ -8,12 +8,15 @@ from rich.console import Console
 from moirai.filters import filter_runs
 from moirai.load import load_runs, validate_file, _find_json_files
 from moirai.schema import Run
+from moirai.intervention.cli import app as intervention_app
 
 app = typer.Typer(
     name="moirai",
     help="Trajectory-level debugging for stochastic agent systems.",
     add_completion=False,
 )
+
+app.add_typer(intervention_app, name="intervention")
 
 console = Console()
 err_console = Console(stderr=True)
