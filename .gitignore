@@ -17,3 +17,26 @@ htmlcov/
 .agent-workspace/
 viewer/node_modules/
 scripts/blog_output/
+.DS_Store
+.claude/scheduled_tasks.lock
+
+# Scratch visualizations dropped at the repo root by experiment runs.
+# Curated figures belong under docs/.
+/*.png
+
+# Raw benchmark trajectory datasets (~2.9GB total). Re-fetch with
+# scripts/fetch_*.py. Our own eval outputs in examples/eval_harness/
+# are tracked; only the upstream dumps are ignored here.
+examples/coderforge/
+examples/coderforge_full/
+examples/openhands/
+examples/openhands_full/
+examples/swe_agent/
+examples/swe_agent_full/
+examples/swe_smith/
+examples/swe_smith_extra/
+examples/swe_rebench/
+examples/swe_rebench_full/
+examples/swe_rebench_v2/
+examples/swebench_verified/
+examples/real_data_demo/data/
