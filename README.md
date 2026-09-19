@@ -1,8 +1,12 @@
 # moirai
 
-Turn your agent's stochastic variation into training signal.
+> **Archived 2026-09-19. The central hypothesis did not survive a held-out test.**
+> Read [What the ablation found](#what-the-ablation-found) before using anything below.
+> The repository stays up because the negative result is the useful part.
 
-When the same agent runs the same task multiple times, it sometimes passes and sometimes fails. That variation isn't noise — it's data. moirai extracts it: aligns trajectories, finds where behavior diverges, identifies which choices predict success, and produces preference pairs for fine-tuning.
+The hypothesis: when the same agent runs the same task multiple times, it sometimes passes and sometimes fails, and that variation is data rather than noise. moirai aligns trajectories, finds where behavior diverges, identifies which choices predict success, and produces preference pairs for fine-tuning.
+
+Steps 2–4 below all rest on divergence points carrying signal about outcome. They don't, and the ablation measures how hard that was pushed before concluding it. Step 1 — behavioral features — is a separate measurement on a different statistic, and the ablation says nothing about it either way.
 
 ## The pipeline
 
@@ -81,7 +85,9 @@ $ moirai export --format dpo examples/swe_rebench --output pairs.jsonl
 
 At each divergence point, moirai extracts (context, chosen, rejected) triples — what the pass run did vs what the fail run did at the same decision point. These are input-ready for Direct Preference Optimization.
 
-## Why this matters
+## The argument this was built on
+
+Kept as written, because the ablation below is only legible against the claim it tested.
 
 **Your agent's failures contain the training signal to fix them.** Every eval run produces trajectories. Most get a pass/fail label and get discarded. When the same agent passes and fails on the same task, the difference between those trajectories is a preference signal — a specific moment where a different choice would have led to a different outcome.
 
@@ -157,6 +163,37 @@ moirai export --format dpo examples/swe_rebench --output pairs.jsonl
 Or run the documented example script:
 ```bash
 python examples/feature_analysis.py examples/swe_rebench --output results.json --verbose
+```
+
+## What the ablation found
+
+The published result for the divergence path was a held-out AUROC of 0.507 — a coin flip. That number was unfalsifiable as stated, because the pipeline that produced it gates branch points behind Fisher's exact plus Benjamini-Hochberg, and at a median of 11 runs per task a 2-vs-9 split can't clear significance after correction. 812 of 1,096 tasks returned no branch points at all, the scorer fell back to a constant, and a constant scorer lands on exactly 0.500 by construction. "No signal" and "no detector" were indistinguishable.
+
+`scripts/exp_matching_ablation.py` separates them. Four matchers, each adding one change, crossed with per-task run budget, with the decision rule fixed before any output was read:
+
+| | statistic | matching | alphabet | detection | best real AUROC |
+|---|---|---|---|---|---|
+| M0 | Fisher + BH | column | 13 step names | **0% at n ≤ 11** | 0.517 |
+| M1 | Ochiai | column | 13 step names | 72–96% | 0.530 |
+| M2 | Ochiai | prefix tree | 13 step names | 72–96% | **0.532** |
+| M3 | Ochiai + EB shrinkage | prefix tree | 165,820 content signatures | 72–96% | 0.524 |
+
+Ochiai is always defined, so M1–M3 fit a model for 72–96% of tasks depending on budget, where M0 fits one for none at all below 15 runs. The detector was the problem. The signal still isn't there:
+
+- **Best AUROC anywhere is 0.532.** Nothing clears the pre-registered 0.55.
+- **No budget trend.** M2 across {4, 6, 8, 11, 15, 20, all} runs: 0.508, 0.491, 0.520, 0.488, 0.492, 0.532, 0.504. That's noise around 0.50, not an undersampled effect waiting for more rollouts.
+- **Real is indistinguishable from shuffled.** Every cell was run twice, once with pass/fail labels permuted within task. Largest real-minus-shuffled gap across all 28 cells: **+0.052**.
+- Finer signatures didn't help. Going from 13 step names to 165,820 content signatures shortens the mean shared prefix across a task's runs from 1.68 steps to 1.18, and moves AUROC down rather than up. Resolution buys nothing when runs stop agreeing almost immediately either way.
+
+So the negative result stands, and now it distinguishes "couldn't detect it" from "isn't there." The first version couldn't.
+
+**What this does not cover.** The behavioral-features result in step 1 is a different statistic — within-task median splits with split-half validation — and wasn't tested here. Neither was any interventional design; [CausalFlow](https://arxiv.org/pdf/2605.25338) attacks the same question by intervening rather than observing, and that remains untried. The claim here is narrow: *off-policy prediction of held-out outcomes from observed trajectory divergence doesn't work on this dataset, and not because the matcher was too weak.*
+
+Reproduce with:
+
+```bash
+python scripts/exp_matching_ablation.py /path/to/swe_rebench_v2/ \
+    --out scripts/blog_output/matching_ablation.json
 ```
 
 ## Limitations
