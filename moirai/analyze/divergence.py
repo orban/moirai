@@ -185,6 +185,175 @@ def find_activity_divergences(
     return result
 
 
+def _action_label(name: str) -> str:
+    """Convert a step name like 'read(test_file)' to readable prose."""
+    base = name.split("(")[0] if "(" in name else name
+    target = name.split("(")[1].rstrip(")") if "(" in name else ""
+
+    labels = {
+        "read": "read" + (f" {target}" if target else ""),
+        "search": "searched" + (f" ({target})" if target else ""),
+        "edit": "edited" + (f" {target}" if target else ""),
+        "write": "wrote" + (f" {target}" if target else ""),
+        "test": "ran tests" + (f" ({target})" if target else ""),
+        "bash": "ran a command" + (f" ({target})" if target else ""),
+        "reason": "stopped to reason",
+        "subagent": "delegated to subagent",
+        "plan": "planned",
+    }
+    return labels.get(base, name)
+
+
+def _best_worst(
+    point: DivergencePoint,
+    min_support: int = 1,
+) -> tuple[str, float, int, str, float, int] | None:
+    """Find the best and worst variants by pass rate.
+
+    Only considers variants with at least min_support runs.
+    Returns (best_name, best_rate, best_count, worst_name, worst_rate, worst_count)
+    or None if rates are unavailable or insufficient support.
+    """
+    rated = [
+        (v, point.success_by_value[v], c)
+        for v, c in point.value_counts.items()
+        if point.success_by_value.get(v) is not None and c >= min_support
+    ]
+    if len(rated) < 2:
+        return None
+    rated.sort(key=lambda x: -x[1])
+    best_name, best_rate, best_count = rated[0]
+    worst_name, worst_rate, worst_count = rated[-1]
+    if best_rate == worst_rate:
+        return None
+    return best_name, best_rate, best_count, worst_name, worst_rate, worst_count
+
+
+def summarize_point(point: DivergencePoint) -> str:
+    """Sharp, opinionated summary of a divergence point.
+
+    Takes a stance: names the better path and the worse path explicitly.
+    """
+    variants = sorted(point.value_counts.items(), key=lambda x: -x[1])
+    if not variants:
+        return f"Divergence at position {point.column}"
+
+    bw = _best_worst(point)
+    if bw is None:
+        # No rate difference — just describe the split
+        top = [v for v, _ in variants if v != GAP][:2]
+        if not top:
+            return f"Divergence at position {point.column}"
+        return f"Runs diverge at step {point.column}: {_action_label(top[0])} vs {_action_label(top[1]) if len(top) > 1 else 'gap'}"
+
+    best_name, best_rate, best_count, worst_name, worst_rate, worst_count = bw
+    delta = best_rate - worst_rate
+
+    # GAP pattern
+    if best_name == GAP:
+        return (
+            f"Skipping step {point.column} correlates with success: "
+            f"{best_rate:.0%} pass ({best_count} runs) vs {worst_rate:.0%} when runs {_action_label(worst_name)} "
+            f"({worst_count} runs)"
+        )
+    if worst_name == GAP:
+        return (
+            f"Runs that {_action_label(best_name)} at step {point.column} pass {best_rate:.0%} "
+            f"({best_count} runs) — those that skip it pass {worst_rate:.0%} ({worst_count} runs)"
+        )
+
+    # Edit-vs-test ordering
+    best_base = best_name.split("(")[0] if "(" in best_name else best_name
+    worst_base = worst_name.split("(")[0] if "(" in worst_name else worst_name
+    edit_types = {"edit", "write"}
+    verify_types = {"test"}
+    if (best_base in edit_types and worst_base in verify_types) or (best_base in verify_types and worst_base in edit_types):
+        winner = _action_label(best_name)
+        loser = _action_label(worst_name)
+        return (
+            f"Runs that {winner} at step {point.column} pass {best_rate:.0%} — "
+            f"those that {loser} pass {worst_rate:.0%} ({delta:+.0%} difference)"
+        )
+
+    # Same action type, different targets
+    if best_base == worst_base and best_name != worst_name:
+        best_target = best_name.split("(")[1].rstrip(")") if "(" in best_name else best_name
+        worst_target = worst_name.split("(")[1].rstrip(")") if "(" in worst_name else worst_name
+        return (
+            f"Choice of {best_base} target matters: {best_target} → {best_rate:.0%} pass "
+            f"vs {worst_target} → {worst_rate:.0%} pass ({delta:+.0%})"
+        )
+
+    # Generic — but still take a stance
+    return (
+        f"At step {point.column}, {_action_label(best_name)} correlates with success ({best_rate:.0%} pass, "
+        f"{best_count} runs) while {_action_label(worst_name)} correlates with failure "
+        f"({worst_rate:.0%} pass, {worst_count} runs)"
+    )
+
+
+def generate_claim(
+    points: list[DivergencePoint],
+    n_runs: int,
+    min_support: int = 3,
+) -> str | None:
+    """Generate the one-sentence claim for a task — the strongest divergence.
+
+    This is the hero: the single most provocative finding.
+    Requires at least min_support runs on BOTH sides of the split.
+    A "100% gap" from 1 run vs 1 run is noise, not a finding.
+    Returns None if no divergence has a meaningful, well-supported outcome gap.
+    """
+    if not points:
+        return None
+
+    # Find the point with the largest pass rate gap, requiring support
+    best_point = None
+    best_delta = 0.0
+    best_bw = None
+    for p in points:
+        bw = _best_worst(p, min_support=min_support)
+        if bw is None:
+            continue
+        delta = bw[1] - bw[4]  # best_rate - worst_rate
+        if delta > best_delta:
+            best_delta = delta
+            best_point = p
+            best_bw = bw
+
+    if best_point is None or best_delta < 0.10:
+        return None
+
+    best_name, best_rate, best_count, worst_name, worst_rate, worst_count = best_bw
+
+    return (
+        f"Critical divergence at step {best_point.column}: "
+        f"{_action_label(best_name)} → {best_rate:.0%} success ({best_count} runs) vs "
+        f"{_action_label(worst_name)} → {worst_rate:.0%} success ({worst_count} runs). "
+        f"{best_delta:.0%} outcome gap."
+    )
+
+
+def build_variant_list(point: DivergencePoint) -> list[dict]:
+    """Build a canonical list of variant dicts from a DivergencePoint.
+
+    Shared by terminal output, JSON export, and HTML report to avoid
+    duplicating the value_counts → variant conversion logic.
+    """
+    variants = []
+    for value, count in sorted(point.value_counts.items(), key=lambda x: -x[1]):
+        rate = point.success_by_value.get(value)
+        n_pass = round(rate * count) if rate is not None else None
+        variants.append({
+            "value": value,
+            "n_runs": count,
+            "n_pass": n_pass,
+            "n_fail": count - n_pass if n_pass is not None else None,
+            "pass_rate": rate,
+        })
+    return variants
+
+
 def _compute_significance(
     values: dict[str, list[str]],
     success_map: dict[str, bool | None],

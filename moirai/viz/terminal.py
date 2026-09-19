@@ -19,6 +19,7 @@ from moirai.schema import (
     ValidationResult,
 )
 
+
 console = Console()
 
 
@@ -754,3 +755,109 @@ def print_features(results: list, runs: list[Run] | None = None) -> None:
             f"  {r.name:<36s} [{color}]{delta_str:>8s}[/{color}]"
             f"  {p_str:>8s}  {q_str:>8s}  {sh_str:>10s}"
         )
+
+
+def print_holdout_results(results) -> None:
+    """Print held-out prediction study results."""
+    console.print(
+        f"\n[bold]Held-out prediction study[/bold]"
+        f" — {results.n_tasks:,} tasks,"
+        f" {results.n_train_runs:,} train / {results.n_test_runs:,} test runs\n"
+    )
+
+    console.print(
+        f"  {'Method':<28s} {'AUROC':>8s}  {'Mean':>8s}  {'Acc@3':>8s}  {'N scored':>8s}"
+    )
+    console.print(f"  {'─' * 28} {'─' * 8}  {'─' * 8}  {'─' * 8}  {'─' * 8}")
+
+    for r in results.method_results:
+        auroc_str = f"{r.auroc:.3f}"
+        mean_str = f"{r.mean_auroc:.3f}"
+        acc_str = f"{r.accuracy_at_3:.3f}" if r.accuracy_at_3 is not None else "—"
+
+        color = "green" if r.mean_auroc > 0.55 else "dim"
+        console.print(
+            f"  {r.name:<28s} {auroc_str:>8s}"
+            f"  [{color}]{mean_str:>8s}[/{color}]"
+            f"  {acc_str:>8s}  {r.n_scored:>8,d}"
+        )
+
+    # Per-task win rates
+    console.print(f"\n  [bold]Per-task win rates[/bold] (fraction of tasks where row beats column)\n")
+    methods_with_wins = [r for r in results.method_results if r.win_rate_vs]
+    if methods_with_wins:
+        names = [r.name for r in methods_with_wins]
+        header = f"  {'':>20s}" + "".join(f" {n[:10]:>10s}" for n in names)
+        console.print(header)
+        console.print(f"  {'─' * 20}" + "─" * (11 * len(names)))
+        for r in methods_with_wins:
+            row = f"  {r.name:>20s}"
+            for opponent in names:
+                if opponent == r.name:
+                    row += f" {'—':>10s}"
+                else:
+                    wr = r.win_rate_vs.get(opponent, 0.5)
+                    color = "green" if wr > 0.55 else "red" if wr < 0.45 else "dim"
+                    row += f" [{color}]{wr:>10.0%}[/{color}]"
+            console.print(row)
+
+
+def print_rerank_results(results) -> None:
+    """Print reranking experiment results."""
+    console.print(
+        f"\n[bold]Reranking experiment[/bold]"
+        f" — {results.n_tasks:,} tasks,"
+        f" K={results.k},"
+        f" {results.n_samples_per_task:,} samples/task\n"
+    )
+
+    console.print(f"  Random pass@1:              {results.random_pass_at_1:.1%}")
+    console.print(f"  Random selection of {results.k}:      {results.random_best_of_k:.1%}")
+    console.print(f"  Oracle (best-of-{results.k}):        {results.oracle_best_of_k:.1%}")
+    console.print()
+
+    console.print(
+        f"  {'Method':<28s} {'Accuracy':>8s}  {'Lift':>8s}  {'95% CI':>16s}"
+    )
+    console.print(f"  {'─' * 28} {'─' * 8}  {'─' * 8}  {'─' * 16}")
+
+    for r in results.method_results:
+        acc_str = f"{r.selection_accuracy:.1%}"
+        sign = "+" if r.lift_over_random >= 0 else ""
+        lift_str = f"{sign}{r.lift_over_random * 100:.1f}pp"
+        ci_str = f"[{r.ci_lower:.1%}, {r.ci_upper:.1%}]"
+
+        color = "green" if r.lift_over_random > 0.01 else "dim"
+        console.print(
+            f"  {r.name:<28s} {acc_str:>8s}"
+            f"  [{color}]{lift_str:>8s}[/{color}]  {ci_str:>16s}"
+        )
+
+    # Per-family captured oracle gap
+    if results.per_family:
+        # Pick the best non-random method for the family table
+        best_method = None
+        for mr in results.method_results:
+            if mr.name != "random":
+                best_method = mr.name
+                break
+
+        if best_method:
+            console.print(f"\n  [bold]Captured oracle gap by task family[/bold]"
+                          f" (method: {best_method})\n")
+            console.print(
+                f"  {'Family':<30s} {'Tasks':>5s}  {'Random':>7s}"
+                f"  {'Oracle':>7s}  {'Method':>7s}  {'Captured':>8s}"
+            )
+            console.print(f"  {'─' * 30} {'─' * 5}  {'─' * 7}  {'─' * 7}  {'─' * 7}  {'─' * 8}")
+
+            for fr in results.per_family:
+                cap = fr.captured_oracle_gap.get(best_method, 0)
+                color = "green" if cap > 0.2 else "red" if cap < 0 else "dim"
+                fam_display = fr.family[:30] if len(fr.family) <= 30 else fr.family[:27] + "..."
+                console.print(
+                    f"  {fam_display:<30s} {fr.n_tasks:>5d}"
+                    f"  {fr.random_acc:>7.1%}  {fr.oracle_acc:>7.1%}"
+                    f"  {fr.method_accs.get(best_method, 0):>7.1%}"
+                    f"  [{color}]{cap:>7.0%}[/{color}]"
+                )
