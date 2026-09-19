@@ -1,25 +1,38 @@
 """Shared design system for blog SVG panels.
 
-Matches the Hugo theme (hugo-theme-til) at ryanorban.com.
+Matches the Working Record design at ryanorban.com — the tokens here are the
+`--record-*` custom properties in that site's static/css/home.css, copied by value
+because these SVGs are inlined into markdown and cannot read the page's CSS.
+
+That coupling is the thing to watch. When the site's palette changed in September
+2026 these panels did not, and seven figures shipped to production as off-white
+cards with green bars sitting on warm paper. If home.css changes again, change the
+eight chrome tokens below and re-run the panel scripts.
+
 All panel scripts import from here for visual consistency.
 """
 
 # ── Typography ─────────────────────────────────────────────────────
-# Geist Sans loaded by Hugo theme via CDN, JetBrains Mono from local files
+# Both faces are self-hosted by the site (static/fonts/) and preloaded in head.html.
 FONT_BODY = "'Geist Sans', system-ui, -apple-system, sans-serif"
 FONT_MONO = "'JetBrains Mono', monospace"
 
-# ── Colors: theme ──────────────────────────────────────────────────
-BG = "#fafaf8"
-TEXT = "#232220"
-TEXT_MID = "#555350"
-TEXT_MUTED = "#8a8784"
-ACCENT = "#5a7a64"
-ACCENT_SOFT = "#edf2ed"
-BORDER = "#e5e2de"
-SURFACE = "#f2f0ec"
+# ── Colors: chrome ─────────────────────────────────────────────────
+# Page furniture. BG is deliberately the page background, not a lighter card: a
+# figure should sit on the paper rather than float above it in a panel.
+BG = "#f6f4ef"                  # --record-bg
+TEXT = "#17161a"                # --record-ink
+TEXT_MID = "#4a4a52"            # --record-mid
+TEXT_MUTED = "#62626a"          # --record-muted
+ACCENT = "#8a3b1e"              # --record-accent (oxide; was a green that clashed)
+ACCENT_SOFT = "#e4c9b6"         # --record-accent-soft
+BORDER = "#e0dcd2"              # --record-line
+SURFACE = "#eae5da"             # a shade off --record-bg, for absence/gap cells
 
 # ── Colors: step palette (muted, cohesive) ─────────────────────────
+# Categorical and load-bearing: nine step types cannot be encoded in one accent, and
+# the published prose refers to these by name ("the orange strip shows the p-value").
+# Left unchanged across the palette migration on purpose — only the chrome moved.
 STEP_COLORS = {
     "read_source": "#4a7399",   # steel blue
     "read_other": "#7a9ab8",    # lighter steel
@@ -30,7 +43,7 @@ STEP_COLORS = {
     "test_fail": "#b84040",     # muted red
     "bash": "#9a5a52",          # dusty red-brown
     "reason": "#7a6890",        # muted purple
-    "gap": SURFACE,             # matches theme surface
+    "gap": SURFACE,             # absence of a step in an aligned column
     "other": "#c8c4be",         # warm gray
 }
 
@@ -40,8 +53,8 @@ FAIL_COLOR = "#b84040"          # matches test_fail
 POSITIVE_BAR = "#4a8a56"        # for positive deltas
 NEGATIVE_BAR = "#b84040"        # for negative deltas
 DIVERGENCE_HOT = "#c07028"      # amber for significant divergence
-DIVERGENCE_COLD = "#8a8784"     # muted for fail-biased
-NEUTRAL_DOT = "#555350"         # for beeswarm
+DIVERGENCE_COLD = TEXT_MUTED    # muted for fail-biased
+NEUTRAL_DOT = TEXT_MID          # for beeswarm
 
 # ── Spacing ────────────────────────────────────────────────────────
 MARGIN = 16

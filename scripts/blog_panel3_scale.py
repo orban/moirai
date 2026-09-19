@@ -160,7 +160,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--from", dest="json_path", default=None,
                         help="Path to moirai divergences JSON output")
+    parser.add_argument("--use-fallback", action="store_true",
+                        help="Emit the built-in placeholder numbers instead of real results")
     args = parser.parse_args()
+
+    # Bare `python blog_panel3_scale.py` used to silently emit the placeholder
+    # numbers below, which is how a figure of invented failure-mode percentages
+    # reached a published post. Falling back to fake data is now something you
+    # have to ask for by name.
+    if not args.json_path and not args.use_fallback:
+        parser.error(
+            "no --from given. This panel needs real analysis output:\n"
+            "    moirai divergences <traces> --output divergences.json\n"
+            "    python scripts/blog_panel3_scale.py --from divergences.json\n"
+            "Pass --use-fallback only if you want the placeholder numbers."
+        )
 
     categories, n_tasks, n_pairs = load_categories(args.json_path)
     svg = build_svg(categories, n_tasks, n_pairs)
