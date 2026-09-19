@@ -146,7 +146,18 @@ def build_svg(features: list[dict], n_tasks: int | None = None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--from", dest="json_path", default=None, help="Path to moirai features JSON output")
+    parser.add_argument("--use-fallback", action="store_true",
+                        help="Emit the built-in placeholder numbers instead of real results")
     args = parser.parse_args()
+
+    # See blog_panel3_scale.py: a bare run used to silently emit placeholders. The
+    # fallback here also disagrees with the real output on the task count (1,096 vs
+    # the 1,025 the analysis produced), so a silent swap changes a stated figure.
+    if not args.json_path and not args.use_fallback:
+        parser.error(
+            "no --from given. This panel needs real analysis output.\n"
+            "Pass --use-fallback only if you want the placeholder numbers."
+        )
 
     features = load_features(args.json_path)
     # Sort by absolute delta descending
