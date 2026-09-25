@@ -125,10 +125,28 @@ def auroc(scores_pos: list[float], scores_neg: list[float]) -> float | None:
 
 # ── matchers ─────────────────────────────────────────────────────────────────
 
-def fit_tree(train, sigfn, prior: float, shrink: bool):
-    """Prefix tree over train runs. Returns {prefix: {sig: score}} for branch nodes.
+def node_key(sigs: list[str], d: int, context: int | None) -> tuple:
+    """The state a run is in just before its step at depth d.
 
-    A node is a decision point when the runs sharing that prefix went on to do
+    `context=None` is the full prefix, which is the strictest equivalence there
+    is: two runs share a state only when their entire histories match. It
+    forbids reconvergence, so once two runs differ they are never compared
+    again. `context=w` keeps only the last w steps, which is a Markov-order-w
+    state and lets runs that wandered apart come back together.
+
+    Which one is right is measurable rather than a matter of taste. Over 1,382
+    tasks at 8 runs each, DDU on the name alphabet reads 0.008 for the full
+    prefix and 0.523 for w=2 -- the full prefix fragments the run set into
+    ambiguity groups, while a two-step context sits above the band Perez et al.
+    measured for real-fault suites.
+    """
+    return tuple(sigs[:d]) if context is None else tuple(sigs[max(0, d - context):d])
+
+
+def fit_tree(train, sigfn, prior: float, shrink: bool, context: int | None = None):
+    """Branch model over train runs. Returns {state: {sig: score}} for branch nodes.
+
+    A node is a decision point when the runs sharing that state went on to do
     two or more different things. No significance test, no minimum branch size:
     every branch node contributes, and thin branches are handled by shrinkage
     rather than by exclusion.
@@ -139,7 +157,7 @@ def fit_tree(train, sigfn, prior: float, shrink: bool):
     for steps, ok in train:
         sigs = [sigfn(s) for s in steps]
         for d in range(len(sigs)):
-            by_prefix[tuple(sigs[:d])][sigs[d]].append(ok)
+            by_prefix[node_key(sigs, d, context)][sigs[d]].append(ok)
 
     model: dict[tuple, dict[str, float]] = {}
     for prefix, branches in by_prefix.items():
@@ -159,14 +177,15 @@ def fit_tree(train, sigfn, prior: float, shrink: bool):
     return model
 
 
-def score_tree(steps, model, sigfn) -> float:
-    """Walk the run down the fitted tree, averaging the scores of the branches
-    it took. A run that leaves the tree early is scored on what it did while it
-    was still inside it."""
+def score_tree(steps, model, sigfn, context: int | None = None) -> float:
+    """Walk the run through the fitted model, averaging the scores of the
+    branches it took. A run whose states are all unseen is scored on nothing and
+    falls back to the constant; under a bounded context that is much rarer,
+    because a state can recur instead of being spent once."""
     sigs = [sigfn(s) for s in steps]
     vals = []
     for d in range(len(sigs)):
-        node = model.get(tuple(sigs[:d]))
+        node = model.get(node_key(sigs, d, context))
         if node and sigs[d] in node:
             vals.append(node[sigs[d]])
     return sum(vals) / len(vals) if vals else 0.5
@@ -228,10 +247,15 @@ def score_columns(steps, model, sigfn) -> float:
 
 
 METHODS = {
-    "M0_nw_names_fisher":   dict(tree=False, sig=sig_name,    ochiai=False, shrink=False),
-    "M1_nw_names_ochiai":   dict(tree=False, sig=sig_name,    ochiai=True,  shrink=False),
-    "M2_tree_names_ochiai": dict(tree=True,  sig=sig_name,    ochiai=True,  shrink=False),
-    "M3_tree_content_shrunk": dict(tree=True, sig=sig_content, ochiai=True, shrink=True),
+    "M0_nw_names_fisher":   dict(tree=False, sig=sig_name,    ochiai=False, shrink=False, context=None),
+    "M1_nw_names_ochiai":   dict(tree=False, sig=sig_name,    ochiai=True,  shrink=False, context=None),
+    "M2_tree_names_ochiai": dict(tree=True,  sig=sig_name,    ochiai=True,  shrink=False, context=None),
+    "M3_tree_content_shrunk": dict(tree=True, sig=sig_content, ochiai=True, shrink=True,  context=None),
+    # M4/M5 change only the state equivalence: last two steps instead of the
+    # whole history. Same statistic, same absent gate, same scoring walk as
+    # M2/M3, so any difference is the abstraction and nothing else.
+    "M4_markov2_names_ochiai":   dict(tree=True, sig=sig_name,    ochiai=True, shrink=False, context=2),
+    "M5_markov2_content_shrunk": dict(tree=True, sig=sig_content, ochiai=True, shrink=True,  context=2),
 }
 
 
@@ -260,15 +284,17 @@ def evaluate(task_runs, method: dict, budget: int, rng: random.Random, shuffle: 
 
     prior = sum(ok for _, ok in train) / len(train)
     sigfn = method["sig"]
+    context = method.get("context")
     if method["tree"]:
-        model = fit_tree(train, sigfn, prior, method["shrink"])
-        scorer = score_tree
+        model = fit_tree(train, sigfn, prior, method["shrink"], context)
+        def scorer(s):
+            return score_tree(s, model, sigfn, context)
     else:
         model = fit_columns(train, sigfn, prior, method["ochiai"])
-        scorer = score_columns
+        def scorer(s):
+            return score_columns(s, model, sigfn)
 
-    a = auroc([scorer(s, model, sigfn) for s in pos],
-              [scorer(s, model, sigfn) for s in neg])
+    a = auroc([scorer(s) for s in pos], [scorer(s) for s in neg])
     return None if a is None else (a, bool(model))
 
 
