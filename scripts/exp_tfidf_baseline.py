@@ -132,11 +132,22 @@ def auroc(pos, neg):
     return wins / (len(pos) * len(neg))
 
 
+def clip(steps, frac):
+    """First `frac` of a run. Prefix prediction is the deployable
+    question and the one Cho et al. report at the 25% checkpoint;
+    the full trace leaks its own ending."""
+    if frac >= 1.0:
+        return steps
+    return steps[: max(1, int(len(steps) * frac))]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("data_path")
     ap.add_argument("--out", required=True)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--prefix-frac", type=float, default=1.0,
+                    help="score only the first fraction of each trace")
     args = ap.parse_args()
 
     by_task = collections.defaultdict(list)
@@ -151,7 +162,7 @@ def main() -> int:
     print(f"{len(tasks)} mixed-outcome tasks, "
           f"{sum(len(v) for v in tasks.values())} runs", file=sys.stderr)
 
-    prepped = {t: [(tokenize(run_text(r["steps"])), bool(r["result"].get("success")))
+    prepped = {t: [(tokenize(run_text(clip(r["steps"], args.prefix_frac))), bool(r["result"].get("success")))
                    for r in rs]
                for t, rs in tasks.items()}
 

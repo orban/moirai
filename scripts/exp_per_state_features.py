@@ -148,11 +148,32 @@ def auroc(pos, neg):
     return wins / (len(pos) * len(neg))
 
 
+def clip(steps, frac):
+    """First `frac` of a run. Prefix prediction is the deployable
+    question and the one Cho et al. report at the 25% checkpoint;
+    the full trace leaks its own ending."""
+    if frac >= 1.0:
+        return steps
+    return steps[: max(1, int(len(steps) * frac))]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("data_path")
     ap.add_argument("--out", required=True)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--prefix-frac", type=float, default=1.0,
+                    help="score only the first fraction of each trace")
+    ap.add_argument("--protocol", choices=("task", "trace"), default="task",
+                    help="task: hold out whole tasks, score within each. "
+                         "trace: 80/20 over runs with tasks spanning both "
+                         "sides, scored pooled -- the setup Cho et al. use.")
+    ap.add_argument("--all-tasks", action="store_true",
+                    help="keep every task, not just mixed-outcome ones. Cho et "
+                         "al. split over all traces, which includes always-pass "
+                         "and always-fail tasks that are far easier to separate.")
+    ap.add_argument("--length-only", action="store_true",
+                    help="ablate to the length feature alone, their 0.659 baseline")
     args = ap.parse_args()
 
     by_task = collections.defaultdict(list)
@@ -161,18 +182,24 @@ def main() -> int:
         by_task[d["task_id"]].append(d)
     tasks = {t: rs for t, rs in by_task.items()
              if len(rs) >= MIN_RUNS
-             and len({bool(r["result"].get("success")) for r in rs}) == 2}
+             and (args.all_tasks
+                  or len({bool(r["result"].get("success")) for r in rs}) == 2)}
+    if args.all_tasks:
+        mixed = sum(1 for rs in tasks.values()
+                    if len({bool(r["result"].get("success")) for r in rs}) == 2)
+        print(f"all-tasks mode: {len(tasks)} tasks, {mixed} of them mixed-outcome",
+              file=sys.stderr)
     if args.limit:
         tasks = dict(list(tasks.items())[: args.limit])
 
     alphabet = sorted({a for rs in tasks.values() for r in rs
-                       for a in activities(r["steps"])})
+                       for a in activities(clip(r["steps"], args.prefix_frac))})
     print(f"{len(tasks)} mixed-outcome tasks, "
           f"{sum(len(v) for v in tasks.values())} runs, "
           f"|A| = {len(alphabet)} activities -> |Q| = {len(alphabet) + 1} states",
           file=sys.stderr)
 
-    prepped = {t: [(state_features(r["steps"], alphabet),
+    prepped = {t: [(state_features(clip(r["steps"], args.prefix_frac), alphabet),
                     bool(r["result"].get("success"))) for r in rs]
                for t, rs in tasks.items()}
 
@@ -188,24 +215,56 @@ def main() -> int:
 
         ids = sorted(data)
         rng.shuffle(ids)
-        half = len(ids) // 2
-        train_ids, test_ids = ids[:half], ids[half:]
-
-        Xtr = np.vstack([x for t in train_ids for x, _ in data[t]])
-        ytr = np.array([ok for t in train_ids for _, ok in data[t]])
+        if args.protocol == "trace":
+            # Every run pooled, then split 80/20 regardless of task. A task's
+            # runs land on both sides, so the model can memorize task
+            # difficulty -- which is why the shuffled arm matters here.
+            allruns = [(x, ok) for t in ids for x, ok in data[t]]
+            rng.shuffle(allruns)
+            cut = int(0.8 * len(allruns))
+            tr, te = allruns[:cut], allruns[cut:]
+            train_ids, test_ids = ids, []
+            Xtr = np.vstack([x for x, _ in tr])
+            ytr = np.array([ok for _, ok in tr])
+        else:
+            half = len(ids) // 2
+            train_ids, test_ids = ids[:half], ids[half:]
+            Xtr = np.vstack([x for t in train_ids for x, _ in data[t]])
+            ytr = np.array([ok for t in train_ids for _, ok in data[t]])
+        if args.length_only:
+            Xtr = Xtr[:, -1:]
         mu, sd = Xtr.mean(0), Xtr.std(0) + 1e-6
+        if args.length_only:
+            mu, sd = Xtr.mean(0), Xtr.std(0) + 1e-6
         w, b = fit_logreg((Xtr - mu) / sd, ytr)
 
         aurocs = []
+        pooled_pos, pooled_neg = [], []
+        if args.protocol == "trace":
+            Xte = np.vstack([x for x, _ in te])
+            if args.length_only:
+                Xte = Xte[:, -1:]
+            sc = ((Xte - mu) / sd) @ w + b
+            pooled_pos = [v for v, (_, ok) in zip(sc, te) if ok]
+            pooled_neg = [v for v, (_, ok) in zip(sc, te) if not ok]
+            aurocs = [auroc(pooled_pos, pooled_neg) or float("nan")]
         for t in test_ids:
             X = (np.vstack([x for x, _ in data[t]]) - mu) / sd
             oks = [ok for _, ok in data[t]]
             scores = X @ w + b
             pos = [s for s, ok in zip(scores, oks) if ok]
             neg = [s for s, ok in zip(scores, oks) if not ok]
+            pooled_pos.extend(pos)
+            pooled_neg.extend(neg)
             a = auroc(pos, neg)
             if a is not None:
                 aurocs.append(a)
+
+        # Pooled across held-out tasks, i.e. rank every run against every other
+        # run regardless of task. This is the easier metric: it can exploit the
+        # fact that some tasks fail more often, which within-task ranking cannot.
+        # Reported so the number is comparable to papers that rank globally.
+        pooled = auroc(pooled_pos[::3], pooled_neg[::3])
 
         names = [f"{a}:{f}" for a in alphabet for f in PER_STATE] + \
                 ["n_states", "transition_entropy", "log_len"]
@@ -215,12 +274,14 @@ def main() -> int:
             "train_tasks": len(train_ids),
             "test_tasks": len(aurocs),
             "auroc": statistics.mean(aurocs) if aurocs else float("nan"),
+            "auroc_pooled": pooled,
             "top_features": [{"feature": names[j], "weight": round(float(w[j]), 4)}
                              for j in top],
         }
         m = out[arm]
-        print(f"[{arm}] {m['n_features']} features, held-out AUROC "
-              f"{m['auroc']:.4f} over {m['test_tasks']} tasks", file=sys.stderr)
+        print(f"[{arm}] within-task AUROC {m['auroc']:.4f} | "
+              f"pooled AUROC {m['auroc_pooled']:.4f} | "
+              f"{m['test_tasks']} tasks", file=sys.stderr)
 
     out["margin"] = out["real"]["auroc"] - out["shuffled"]["auroc"]
     print(f"\nmargin over shuffled: {out['margin']:+.4f}", file=sys.stderr)
