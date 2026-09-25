@@ -1570,3 +1570,120 @@ def structure(
         with open(output, "w") as f:
             json_mod.dump(envelope, f, indent=2)
         console.print(f"\n[green]JSON written to {output}[/green]")
+
+@app.command()
+def diagnosability(
+    path: Path = typer.Argument(..., help="Path to a run file or directory"),
+    min_runs: int = typer.Option(2, "--min-runs", help="Min runs per task to score"),
+    granularity: str = typer.Option("name", "--granularity",
+        help="Component alphabet: 'name' (step name) or 'target' (step name + file/command)"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="JSON output path"),
+    strict: bool = typer.Option(False, help="Treat warnings as errors"),
+    model: str | None = typer.Option(None, help="Filter by model"),
+    harness: str | None = typer.Option(None, help="Filter by harness"),
+    task_family: str | None = typer.Option(None, "--task-family", help="Filter by task family"),
+) -> None:
+    """Score whether a run set can support divergence analysis at all (DDU).
+
+    Run this before spending compute on branch analysis. It reads no pass/fail
+    labels: it measures whether the runs differ in which components they touch,
+    which is the precondition every spectrum method depends on.
+    """
+    import collections
+
+    from moirai.analyze.diagnosability import (
+        compute_all_diagnosability,
+        step_name_signature,
+        step_target_signature,
+    )
+
+    if granularity not in ("name", "target"):
+        err_console.print(f"[red]Unknown granularity '{granularity}'. Use 'name' or 'target'.[/red]")
+        raise typer.Exit(2)
+    signature = step_name_signature if granularity == "name" else step_target_signature
+
+    runs = _load_and_filter(path, strict, model=model, harness=harness, task_family=task_family)
+
+    # Grouped by task directly rather than through select_task_groups: DDU needs
+    # no outcome labels, so filtering to mixed-outcome tasks would discard runs
+    # the metric is perfectly able to score.
+    task_groups: dict[str, list] = collections.defaultdict(list)
+    for r in runs:
+        task_groups[r.task_id].append(r)
+
+    scores = compute_all_diagnosability(task_groups, signature=signature, min_runs=min_runs)
+    if not scores:
+        err_console.print(
+            f"[yellow]No tasks with >={min_runs} runs. Diversity is undefined on a "
+            f"single run, so those tasks are not scored.[/yellow]"
+        )
+        raise typer.Exit(2)
+
+    dropped = len(task_groups) - len(scores)
+    console.print(
+        f"\n[bold]Diagnosability (DDU)[/bold] — {len(scores)} tasks scored at "
+        f"'{granularity}' granularity"
+        + (f", {dropped} dropped below --min-runs {min_runs}" if dropped else "")
+        + "\n"
+    )
+    console.print(
+        f"  {'Task':<45s} {'DDU':>7s}  {'Dens':>6s}  {'Div':>6s}"
+        f"  {'Uniq':>6s}  {'Runs':>4s}  {'Comp':>5s}"
+    )
+    console.print(f"  {'─' * 45} {'─' * 7}  {'─' * 6}  {'─' * 6}  {'─' * 6}  {'─' * 4}  {'─' * 5}")
+
+    show = scores[:10] + [None] + scores[-10:] if len(scores) > 20 else scores
+    for d in show:
+        if d is None:
+            console.print(f"  {'...':>45s}")
+            continue
+        tid = d.task_id[:45] if len(d.task_id) <= 45 else d.task_id[:42] + "..."
+        color = "green" if d.ddu > 0.3 else "red" if d.ddu < 0.1 else "dim"
+        console.print(
+            f"  {tid:<45s} [{color}]{d.ddu:>7.3f}[/{color}]"
+            f"  {d.density:>6.3f}  {d.diversity:>6.3f}"
+            f"  {d.uniqueness:>6.3f}  {d.n_runs:>4d}  {d.n_components:>5d}"
+        )
+
+    ddus = sorted(d.ddu for d in scores)
+    median = ddus[len(ddus) // 2]
+    console.print(
+        f"\n  Median DDU: {median:.4f}   Mean: {sum(ddus)/len(ddus):.4f}"
+        f"   Min: {ddus[0]:.4f}   Max: {ddus[-1]:.4f}"
+    )
+    console.print(
+        "\n  [dim]DDU has no absolute pass mark. Perez et al. (ICSE 2017) use it\n"
+        "  comparatively: higher means the run set can localize better, and their\n"
+        "  Defects4J medians ran 0.10 to 0.42. Read a low value as 'this run set\n"
+        "  cannot express the answer', not as 'there is no signal here'.[/dim]"
+    )
+
+    if output:
+        import json as json_mod
+
+        envelope = {
+            "dataset": str(path),
+            "granularity": granularity,
+            "min_runs": min_runs,
+            "n_tasks_scored": len(scores),
+            "n_tasks_dropped": dropped,
+            "median_ddu": round(median, 6),
+            "scores": [
+                {
+                    "task_id": d.task_id,
+                    "ddu": round(d.ddu, 6),
+                    "density": round(d.density, 6),
+                    "raw_density": round(d.raw_density, 6),
+                    "diversity": round(d.diversity, 6),
+                    "uniqueness": round(d.uniqueness, 6),
+                    "n_runs": d.n_runs,
+                    "n_components": d.n_components,
+                    "n_distinct_rows": d.n_distinct_rows,
+                    "n_ambiguity_groups": d.n_ambiguity_groups,
+                }
+                for d in scores
+            ],
+        }
+        with open(output, "w") as f:
+            json_mod.dump(envelope, f, indent=2)
+        console.print(f"\n[green]JSON written to {output}[/green]")
