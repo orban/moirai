@@ -17,6 +17,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov"]
+# scripts/convert_*.py pull corpora from the Hub; scripts/exp_mixed_outcome_filter.py and
+# scripts/run_diagnosability.py read the raw parquet directly. Floors are the versions
+# these were run against; nothing here is exercised by the library itself.
+data = ["pyarrow>=25.0", "datasets>=5.0"]
 
 [project.scripts]
 moirai = "moirai.cli:app"
